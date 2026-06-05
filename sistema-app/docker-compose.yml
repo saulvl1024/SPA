@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16
+    container_name: seren_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: seren
+      POSTGRES_PASSWORD: seren
+      POSTGRES_DB: seren_spa
+    ports:
+      - "5433:5432"
+    volumes:
+      - seren_pgdata:/var/lib/postgresql/data
+
+volumes:
+  seren_pgdata:

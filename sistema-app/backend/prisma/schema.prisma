@@ -1,0 +1,203 @@
+// SÉRÈN Spa — modelo de datos
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  admin
+  empleada
+}
+
+enum PaymentMethod {
+  efectivo
+  tarjeta
+  transferencia
+}
+
+enum AppointmentStatus {
+  agendada
+  confirmada
+  en_sala
+  completada
+  no_asistio
+  cancelada
+}
+
+model Staff {
+  id            String        @id @default(cuid())
+  name          String
+  pinHash       String        // PIN hasheado
+  role          Role          @default(empleada)
+  active        Boolean       @default(true)
+  // si la empleada también es especialista
+  specialty     String?
+  commissionRate Float        @default(0.10)
+  createdAt     DateTime      @default(now())
+
+  appointments  Appointment[]
+  sales         Sale[]
+  cashSessions  CashSession[]
+  clinicalNotes ClinicalNote[]
+}
+
+model Client {
+  id          String    @id @default(cuid())
+  name        String
+  phone       String?
+  email       String?
+  birth       DateTime?
+  tag         String    @default("Nueva") // Nueva | Frecuente | VIP
+  skin        String?
+  points      Int       @default(0)
+  credit      Float     @default(0) // saldo a favor (anticipos)
+  createdAt   DateTime  @default(now())
+
+  record      ClinicalRecord?
+  packages    ClientPackage[]
+  appointments Appointment[]
+  sales       Sale[]
+}
+
+model ClinicalRecord {
+  id              String   @id @default(cuid())
+  client          Client   @relation(fields: [clientId], references: [id])
+  clientId        String   @unique
+  allergies       String?
+  contraindications String?
+  notes           ClinicalNote[]
+}
+
+model ClinicalNote {
+  id           String         @id @default(cuid())
+  record       ClinicalRecord @relation(fields: [recordId], references: [id])
+  recordId     String
+  staff        Staff?         @relation(fields: [staffId], references: [id])
+  staffId      String?
+  date         DateTime       @default(now())
+  title        String
+  evolution    String?
+  attachments  String[]       @default([])
+}
+
+model Service {
+  id          String          @id @default(cuid())
+  name        String
+  durationMin Int             @default(60)
+  price       Float
+  active      Boolean         @default(true)
+  recipe      ServiceSupply[]
+  appointments Appointment[]
+}
+
+model Supply {
+  id        String          @id @default(cuid())
+  name      String
+  category  String?
+  unit      String          @default("pza")
+  stock     Float           @default(0)
+  minStock  Float           @default(0)
+  recipes   ServiceSupply[]
+}
+
+model ServiceSupply {
+  service   Service @relation(fields: [serviceId], references: [id])
+  serviceId String
+  supply    Supply  @relation(fields: [supplyId], references: [id])
+  supplyId  String
+  qty       Float
+  @@id([serviceId, supplyId])
+}
+
+model Product {
+  id       String @id @default(cuid())
+  name     String
+  price    Float
+  stock    Int    @default(0)
+  minStock Int    @default(0)
+}
+
+model Package {
+  id            String          @id @default(cuid())
+  name          String
+  sessions      Int
+  price         Float
+  validityMonths Int            @default(3)
+  clientPackages ClientPackage[]
+}
+
+model ClientPackage {
+  id         String   @id @default(cuid())
+  client     Client   @relation(fields: [clientId], references: [id])
+  clientId   String
+  package    Package  @relation(fields: [packageId], references: [id])
+  packageId  String
+  serviceId  String?
+  total      Int
+  remaining  Int
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+}
+
+model Appointment {
+  id           String            @id @default(cuid())
+  client       Client            @relation(fields: [clientId], references: [id])
+  clientId     String
+  staff        Staff             @relation(fields: [staffId], references: [id])
+  staffId      String
+  service      Service           @relation(fields: [serviceId], references: [id])
+  serviceId    String
+  start        DateTime
+  end          DateTime?
+  status       AppointmentStatus @default(agendada)
+  createdAt    DateTime          @default(now())
+}
+
+model CashSession {
+  id        String    @id @default(cuid())
+  staff     Staff     @relation(fields: [staffId], references: [id])
+  staffId   String
+  openedAt  DateTime  @default(now())
+  closedAt  DateTime?
+  fondo     Float     @default(0)
+  // corte
+  countedCash Float?
+  closed    Boolean   @default(false)
+  sales     Sale[]
+}
+
+model Sale {
+  id          String        @id @default(cuid())
+  ticketNo    Int           @default(autoincrement())
+  client      Client        @relation(fields: [clientId], references: [id])
+  clientId    String
+  cashier     Staff         @relation(fields: [cashierId], references: [id])
+  cashierId   String
+  session     CashSession?  @relation(fields: [sessionId], references: [id])
+  sessionId   String?
+  date        DateTime      @default(now())
+  subtotal    Float
+  discount    Float         @default(0)
+  creditUsed  Float         @default(0)
+  total       Float
+  paymentMethod PaymentMethod @default(efectivo)
+  points      Int           @default(0)
+  items       SaleItem[]
+}
+
+model SaleItem {
+  id          String  @id @default(cuid())
+  sale        Sale    @relation(fields: [saleId], references: [id])
+  saleId      String
+  type        String  // servicio | producto | paquete | anticipo
+  refId       String?
+  name        String
+  qty         Int     @default(1)
+  price       Float
+  specialistId String?
+  fromPackage Boolean @default(false)
+}

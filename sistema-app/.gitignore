@@ -1,5 +1,52 @@
+# === Dependencias ===
 node_modules/
+**/node_modules/
+
+# === Builds / salidas ===
 dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# === Variables de entorno (SECRETOS — nunca subir) ===
 .env
+.env.*
+!.env.example
+**/.env
+!**/.env.example
+
+# === Logs ===
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# === Base de datos local / respaldos ===
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+backups/
+
+# === Sistema operativo ===
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# === Conflictos de sincronización de OneDrive ===
+*-PC-*
+*conflicted*
+*-Copia*
+*- copia*
+
+# === Editores / IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === Subidas de usuarios (archivos en runtime) ===
+backend/uploads/
+uploads/

@@ -3,145 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SÉRÈN · Spa & Wellness</title>
+<title>SÉRÈN · Spa & Wellness — Faciales, masajes y belleza</title>
+<meta name="description" content="SÉRÈN Spa: un santuario de bienestar. Faciales, masajes, tratamientos corporales y estética avanzada. Reserva tu cita por WhatsApp.">
+<meta name="theme-color" content="#7A5C68">
+<link rel="canonical" href="https://www.serenspa.com/">
+
+<!-- Open Graph / redes sociales y WhatsApp -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="SÉRÈN Spa & Wellness">
+<meta property="og:description" content="Tu pausa para renacer. Faciales, masajes y tratamientos a tu medida. Reserva por WhatsApp.">
+<meta property="og:image" content="https://www.serenspa.com/og-image.jpg">
+<meta property="og:url" content="https://www.serenspa.com/">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="icon" href="favicon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<style>
-  :root{
-    --cream:#F7F1EC; --cream-2:#EFE6DE; --plum:#7A5C68; --plum-dk:#5E4451;
-    --blush:#D9A8A0; --blush-lt:#E8C9C2; --sage:#8A9A85; --gold:#C9A66B;
-    --ink:#2E2A28; --muted:#8A7E78; --line:#E2D6CC;
-  }
-  *{margin:0;padding:0;box-sizing:border-box}
-  html{scroll-behavior:smooth}
-  body{font-family:'Jost',sans-serif;color:var(--ink);background:var(--cream);line-height:1.7;font-weight:300}
-  h1,h2,h3,.serif{font-family:'Cormorant Garamond',serif;font-weight:500;line-height:1.15}
-  a{text-decoration:none;color:inherit}
-  .wrap{max-width:1180px;margin:0 auto;padding:0 32px}
-  .eyebrow{font-size:.72rem;letter-spacing:.32em;text-transform:uppercase;color:var(--plum);font-weight:400}
-
-  /* NAV */
-  header{position:fixed;top:0;left:0;right:0;z-index:50;backdrop-filter:blur(10px);
-    background:rgba(247,241,236,.82);border-bottom:1px solid var(--line)}
-  nav{display:flex;align-items:center;justify-content:space-between;height:74px}
-  .logo{font-family:'Cormorant Garamond',serif;font-size:1.7rem;letter-spacing:.42em;font-weight:600;padding-left:.4em}
-  .navlinks{display:flex;gap:40px;font-size:.82rem;letter-spacing:.12em;text-transform:uppercase}
-  .navlinks a{color:var(--ink);opacity:.75;transition:opacity .2s}
-  .navlinks a:hover{opacity:1}
-  .btn{display:inline-block;padding:13px 30px;border-radius:40px;font-size:.78rem;letter-spacing:.14em;
-    text-transform:uppercase;transition:.25s;cursor:pointer;border:1px solid var(--plum)}
-  .btn-solid{background:var(--plum);color:#fff}
-  .btn-solid:hover{background:var(--plum-dk);border-color:var(--plum-dk)}
-  .btn-ghost{background:transparent;color:var(--plum)}
-  .btn-ghost:hover{background:var(--plum);color:#fff}
-  .menu-btn{display:none}
-
-  /* HERO */
-  .hero{position:relative;min-height:100vh;display:flex;align-items:center;overflow:hidden;
-    background:linear-gradient(160deg,#F7F1EC 0%,#EFE0DA 55%,#E7D3CE 100%)}
-  .hero .wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:40px;align-items:center;padding-top:74px;position:relative;z-index:2}
-  .hero h1{font-size:clamp(3rem,7vw,6rem);letter-spacing:.01em}
-  .hero h1 em{font-style:italic;color:var(--plum)}
-  .hero p{max-width:430px;margin:26px 0 38px;color:var(--ink);opacity:.8}
-  .hero-cta{display:flex;gap:16px;flex-wrap:wrap}
-  .hero-art{position:relative;height:520px}
-  .blob{position:absolute;inset:0;margin:auto;width:430px;height:430px;border-radius:50%;
-    background:radial-gradient(circle at 35% 30%,var(--blush-lt),var(--blush) 60%,var(--plum) 130%);
-    box-shadow:0 40px 90px -30px rgba(122,92,104,.55)}
-  .ring{position:absolute;inset:0;margin:auto;width:500px;height:500px;border:1px solid rgba(122,92,104,.25);border-radius:50%}
-  .leaf{position:absolute;font-family:'Cormorant Garamond',serif;font-style:italic;color:var(--plum);opacity:.7}
-  .stat{position:absolute;bottom:30px;left:0;background:rgba(255,255,255,.7);backdrop-filter:blur(6px);
-    border:1px solid var(--line);border-radius:18px;padding:16px 22px}
-  .stat b{font-family:'Cormorant Garamond',serif;font-size:1.9rem;color:var(--plum);display:block;line-height:1}
-  .stat span{font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
-
-  /* SECTION base */
-  section{padding:110px 0}
-  .sec-head{text-align:center;max-width:620px;margin:0 auto 64px}
-  .sec-head h2{font-size:clamp(2.2rem,4.4vw,3.4rem);margin:14px 0}
-  .sec-head p{color:var(--muted)}
-
-  /* ABOUT */
-  .about{background:var(--cream)}
-  .about .grid{display:grid;grid-template-columns:1fr 1fr;gap:70px;align-items:center}
-  .about-art{height:420px;border-radius:200px 200px 24px 24px;
-    background:linear-gradient(180deg,var(--sage) 0%,#6f8169 100%);position:relative;overflow:hidden}
-  .about-art::after{content:'';position:absolute;inset:0;
-    background:radial-gradient(circle at 70% 20%,rgba(255,255,255,.25),transparent 40%)}
-  .about h2{font-size:clamp(2rem,4vw,3rem);margin:14px 0 20px}
-  .about p{color:var(--ink);opacity:.82;margin-bottom:18px}
-
-  /* SERVICES */
-  .services{background:var(--cream-2)}
-  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:26px}
-  .card{background:#fff;border:1px solid var(--line);border-radius:22px;padding:38px 32px;transition:.3s}
-  .card:hover{transform:translateY(-6px);box-shadow:0 30px 60px -30px rgba(122,92,104,.35)}
-  .card .ic{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;margin-bottom:22px;
-    background:var(--cream)}
-  .card h3{font-size:1.6rem;margin-bottom:10px}
-  .card p{color:var(--muted);font-size:.94rem;margin-bottom:18px}
-  .price{font-family:'Cormorant Garamond',serif;color:var(--plum);font-size:1.25rem}
-
-  /* PACKAGES */
-  .packs{background:var(--cream)}
-  .pgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:26px}
-  .pack{border:1px solid var(--line);border-radius:22px;padding:42px 34px;text-align:center;background:#fff;position:relative}
-  .pack.feat{background:linear-gradient(170deg,var(--plum),var(--plum-dk));color:#fff;border:none;transform:scale(1.04)}
-  .pack.feat .num,.pack.feat .pp{color:#fff}
-  .tag{position:absolute;top:-13px;left:50%;transform:translateX(-50%);background:var(--gold);color:#fff;
-    font-size:.66rem;letter-spacing:.18em;text-transform:uppercase;padding:6px 16px;border-radius:20px}
-  .num{font-family:'Cormorant Garamond',serif;font-size:3.4rem;color:var(--plum);line-height:1}
-  .pack h3{font-size:1.5rem;margin:6px 0 16px}
-  .pack ul{list-style:none;font-size:.9rem;margin:20px 0 26px;color:inherit;opacity:.85}
-  .pack li{padding:7px 0;border-bottom:1px solid rgba(226,214,204,.5)}
-  .pack.feat li{border-color:rgba(255,255,255,.18)}
-  .pp{font-family:'Cormorant Garamond',serif;font-size:2rem;color:var(--plum);margin-bottom:18px}
-
-  /* EXPERIENCE strip */
-  .strip{background:linear-gradient(120deg,var(--blush) 0%,var(--plum) 100%);color:#fff;text-align:center}
-  .strip h2{font-size:clamp(2rem,4vw,3.2rem);max-width:760px;margin:0 auto 16px}
-  .strip p{max-width:520px;margin:0 auto 32px;opacity:.9}
-  .strip .btn{border-color:#fff;color:#fff}
-  .strip .btn:hover{background:#fff;color:var(--plum)}
-
-  /* TESTIMONIALS */
-  .tests{background:var(--cream-2)}
-  .tgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:26px}
-  .quote{background:#fff;border:1px solid var(--line);border-radius:22px;padding:36px 32px}
-  .quote .stars{color:var(--gold);letter-spacing:3px;margin-bottom:14px}
-  .quote p{font-family:'Cormorant Garamond',serif;font-style:italic;font-size:1.25rem;color:var(--ink);margin-bottom:18px}
-  .quote .who{font-size:.8rem;letter-spacing:.1em;text-transform:uppercase;color:var(--plum)}
-
-  /* BOOKING / FOOTER CTA */
-  .booking{background:var(--cream)}
-  .book-card{background:#fff;border:1px solid var(--line);border-radius:30px;padding:64px;text-align:center;
-    box-shadow:0 40px 90px -50px rgba(122,92,104,.4)}
-  .book-card h2{font-size:clamp(2.2rem,4.5vw,3.4rem);margin:14px 0 18px}
-  .book-card p{color:var(--muted);max-width:480px;margin:0 auto 30px}
-
-  footer{background:var(--ink);color:#E8DDD6;padding:70px 0 36px}
-  .fgrid{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:40px;margin-bottom:50px}
-  footer .logo{color:#fff;display:block;margin-bottom:16px;padding:0}
-  footer h4{font-size:.78rem;letter-spacing:.2em;text-transform:uppercase;color:var(--blush);margin-bottom:18px;font-weight:400}
-  footer a,footer li{display:block;color:#C9BBB2;font-size:.9rem;padding:5px 0}
-  footer a:hover{color:#fff}
-  footer ul{list-style:none}
-  .fbar{border-top:1px solid rgba(255,255,255,.12);padding-top:24px;display:flex;justify-content:space-between;
-    font-size:.78rem;color:#9C8E85;flex-wrap:wrap;gap:10px}
-
-  @media(max-width:920px){
-    .hero .wrap,.about .grid{grid-template-columns:1fr}
-    .hero-art{height:360px;order:-1}
-    .blob{width:300px;height:300px}.ring{width:350px;height:350px}
-    .cards,.pgrid,.tgrid{grid-template-columns:1fr}
-    .pack.feat{transform:none}
-    .fgrid{grid-template-columns:1fr 1fr}
-    .navlinks{display:none}.menu-btn{display:block}
-    .book-card{padding:40px 24px}
-    section{padding:80px 0}
-  }
-</style>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
@@ -153,6 +32,7 @@
       <a href="#services">Servicios</a>
       <a href="#packages">Paquetes</a>
       <a href="#testimonials">Opiniones</a>
+      <a href="#ubicacion">Ubicación</a>
       <a href="#book">Contacto</a>
     </div>
     <a href="#book" class="btn btn-solid">Reservar</a>
@@ -326,8 +206,38 @@
       <h2>Tu momento empieza aquí</h2>
       <p>Agenda tu cita y déjanos cuidar de ti. Te confirmamos por WhatsApp en minutos.</p>
       <div class="hero-cta" style="justify-content:center">
-        <a href="https://wa.me/" class="btn btn-solid">Reservar por WhatsApp</a>
-        <a href="tel:+520000000000" class="btn btn-ghost">Llámanos</a>
+        <a href="https://wa.me/15556700946?text=Hola%20S%C3%89R%C3%88N%20Spa%2C%20quiero%20agendar%20una%20cita%20%F0%9F%8C%B8" target="_blank" rel="noreferrer" class="btn btn-solid">Reservar por WhatsApp</a>
+        <a href="tel:+15556700946" class="btn btn-ghost">Llámanos</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- UBICACIÓN Y HORARIOS -->
+<section id="ubicacion" style="padding:90px 0;background:var(--cream)">
+  <div class="wrap">
+    <div class="sec-head" style="text-align:center;max-width:620px;margin:0 auto 50px">
+      <span class="eyebrow">Visítanos</span>
+      <h2 style="font-family:'Cormorant Garamond',serif;font-weight:500;font-size:clamp(2rem,4vw,3rem);margin:12px 0">Ubicación y horarios</h2>
+      <p style="color:#8A7E78">Estamos para recibirte en un espacio pensado para tu calma.</p>
+    </div>
+    <div class="loc-grid">
+      <div style="border-radius:24px;overflow:hidden;border:1px solid #E2D6CC;min-height:320px">
+        <iframe title="Mapa SÉRÈN Spa" width="100%" height="100%" style="border:0;min-height:320px;display:block"
+          loading="lazy" referrerpolicy="no-referrer-when-downgrade"
+          src="https://www.google.com/maps?q=Av.%20Reforma%20100%2C%20CDMX&output=embed"></iframe>
+      </div>
+      <div style="background:#fff;border:1px solid #E2D6CC;border-radius:24px;padding:38px">
+        <h3 style="font-family:'Cormorant Garamond',serif;font-weight:600;font-size:1.5rem;margin-bottom:18px">SÉRÈN Spa</h3>
+        <div style="display:flex;gap:12px;margin-bottom:16px"><span style="color:#7A5C68;font-size:1.2rem">📍</span><div><b>Dirección</b><br><span style="color:#8A7E78">Av. Reforma 100, Col. Centro, CDMX</span></div></div>
+        <div style="display:flex;gap:12px;margin-bottom:16px"><span style="color:#7A5C68;font-size:1.2rem">📞</span><div><b>Teléfono / WhatsApp</b><br><span style="color:#8A7E78">+1 555 670 0946</span></div></div>
+        <div style="display:flex;gap:12px;margin-bottom:20px"><span style="color:#7A5C68;font-size:1.2rem">🕒</span><div><b>Horarios</b><br>
+          <table style="margin-top:6px;font-size:.92rem;color:#8A7E78;border-collapse:collapse">
+            <tr><td style="padding:2px 18px 2px 0">Lunes – Viernes</td><td>9:00 – 20:00</td></tr>
+            <tr><td style="padding:2px 18px 2px 0">Sábado</td><td>9:00 – 18:00</td></tr>
+            <tr><td style="padding:2px 18px 2px 0">Domingo</td><td>Cerrado</td></tr>
+          </table></div></div>
+        <a href="https://wa.me/15556700946?text=Hola%20S%C3%89R%C3%88N%20Spa%2C%20quiero%20agendar%20una%20cita%20%F0%9F%8C%B8" target="_blank" rel="noreferrer" class="btn btn-solid">Reservar por WhatsApp</a>
       </div>
     </div>
   </div>

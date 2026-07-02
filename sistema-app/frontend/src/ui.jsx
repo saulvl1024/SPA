@@ -21,10 +21,28 @@ export function Toaster() {
 }
 
 /* ---- Modal ---- */
-export function Modal({ title, children, onClose }) {
+// width: ancho máximo en px (default 480). Útil para formularios densos.
+export function Modal({ title, children, onClose, width }) {
+  const [closing, setClosing] = useState(false);
+
+  // Cierre con salida animada: dispara la animación inversa y desmonta al terminar
+  const close = () => {
+    if (closing) return;
+    setClosing(true);
+    setTimeout(onClose, 180); // coincide con la duración de salida en CSS
+  };
+
+  // Cerrar con Escape (craft esperado en cualquier modal)
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') close(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [closing]);
+
   return (
-    <div className="overlay" onClick={e => { if (e.target.classList.contains('overlay')) onClose(); }}>
-      <div className="modal">
+    <div className={'overlay' + (closing ? ' closing' : '')}
+      onClick={e => { if (e.target.classList.contains('overlay')) close(); }}>
+      <div className={'modal' + (closing ? ' closing' : '')} style={width ? { maxWidth: width } : undefined}>
         {title && <h2>{title}</h2>}
         {children}
       </div>
@@ -53,3 +71,8 @@ export function downloadExcel(filename, sheets) {
 
 export const money = n => '$' + Math.round(n || 0).toLocaleString('es-MX');
 export const initials = n => (n || '').split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+
+// Normaliza texto para búsquedas: minúsculas y SIN acentos (María → maria).
+export const norm = s => (s || '').toString().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+// ¿El texto contiene la consulta, ignorando acentos y mayúsculas?
+export const matches = (text, query) => norm(text).includes(norm(query));

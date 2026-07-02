@@ -8,7 +8,21 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Configuración de la instalación (controlada por el dueño del ERP / súper-admin).
+// Una sola fila. disabledModules = módulos ocultos para este cliente.
+model SystemConfig {
+  id              String   @id @default("singleton")
+  businessName    String?  // nombre del negocio (para mensajes, ticket, etc.)
+  businessType    String?  @default("general") // giro: general | spa | tienda | restaurante | servicios
+  settings        Json?    // ajustes finos por giro (ej. {usarRecetas:false, ...})
+  disabledModules String[] @default([]) // claves de módulos deshabilitados (ej. ["tratos","finanzas"])
+  automations     Json?    // config de automatizaciones del CRM (cumpleaños, post-visita, reactivación)
+  loyalty         Json?    // config del programa de lealtad (tasa de puntos, canje, niveles)
+  updatedAt       DateTime @updatedAt
+}
+
 enum Role {
+  superadmin
   admin
   empleada
 }
@@ -31,18 +45,46 @@ enum AppointmentStatus {
 model Staff {
   id            String        @id @default(cuid())
   name          String
-  pinHash       String        // PIN hasheado
+  // Credenciales de acceso al SISTEMA (correo + contraseña)
+  email         String?       @unique
+  passwordHash  String?       // contraseña hasheada (login del sistema)
+  // PIN: SOLO para el POS (identificar cajera, abrir/cerrar caja). Opcional.
+  pinHash       String?       // PIN hasheado (4-6 dígitos)
   role          Role          @default(empleada)
   active        Boolean       @default(true)
   // si la empleada también es especialista
   specialty     String?
   commissionRate Float        @default(0.10)
+  // Ficha del empleado
+  phone         String?
+  position      String?       // puesto (Recepción, Esteticista, etc.)
+  hireDate      DateTime?     // fecha de ingreso
+  photo         String?       // URL o data de foto (opcional)
+  permissions   String[]      @default([])  // módulos permitidos (vacío = permisos por defecto del rol)
+  schedule      Json?         // horario semanal: { "1": {on:true, from:"09:00", to:"18:00"}, ... } (0=domingo..6=sábado)
+  warehouseId   String?       // sucursal/almacén asignado (si multi-sucursal está activo)
   createdAt     DateTime      @default(now())
 
   appointments  Appointment[]
   sales         Sale[]
   cashSessions  CashSession[]
   clinicalNotes ClinicalNote[]
+  documents     StaffDocument[]
+  deals         Deal[]
+}
+
+// Documentos del empleado (contrato, identificación, certificaciones)
+model StaffDocument {
+  id        String   @id @default(cuid())
+  staff     Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  staffId   String
+  category  String   @default("Otro") // Contrato | Identificación | Certificación | Otro
+  name      String                     // nombre/etiqueta visible
+  fileName  String                     // nombre original del archivo
+  mimeType  String
+  size      Int                        // bytes
+  data      String   @db.Text          // contenido en base64 (data URL)
+  createdAt DateTime @default(now())
 }
 
 model Client {
@@ -51,16 +93,126 @@ model Client {
   phone       String?
   email       String?
   birth       DateTime?
-  tag         String    @default("Nueva") // Nueva | Frecuente | VIP
-  skin        String?
+  tag         String    @default("Nueva") // etiqueta actual (nombre de la etiqueta)
+  tagManual   Boolean   @default(false)   // si el admin la fijó manualmente (el auto no la cambia)
+  skin        String?                       // (heredado spa) tipo de piel — ya no se captura en el alta
+  note        String?                       // nota general opcional del cliente (cualquier giro)
   points      Int       @default(0)
   credit      Float     @default(0) // saldo a favor (anticipos)
+  source      String?   // CRM: cómo nos conoció (Instagram, Recomendación, etc.)
+  sellerId    String?   // vendedor asignado (cartera de clientes) — módulo Ventas
   createdAt   DateTime  @default(now())
 
   record      ClinicalRecord?
   packages    ClientPackage[]
   appointments Appointment[]
   sales       Sale[]
+  followUps   FollowUp[]
+  deals       Deal[]
+  quotes      Quote[]
+  @@index([sellerId])
+}
+
+// Etapas del pipeline de tratos (configurables por el admin)
+model DealStage {
+  id        String   @id @default(cuid())
+  name      String                       // Prospecto, Contactado, Propuesta...
+  order     Int      @default(0)          // posición de la columna (izq→der)
+  isWon     Boolean  @default(false)      // etapa de cierre ganado
+  isLost    Boolean  @default(false)      // etapa de cierre perdido
+  createdAt DateTime @default(now())
+  deals     Deal[]
+}
+
+// Trato / oportunidad de venta (para el pipeline B2B arrastrable)
+model Deal {
+  id         String     @id @default(cuid())
+  title      String                        // "Venta de 10 ton de maíz"
+  amount     Float      @default(0)         // monto del trato
+  client     Client?    @relation(fields: [clientId], references: [id])
+  clientId   String?
+  contactName String?                       // si no hay cliente formal, un contacto suelto
+  stage      DealStage  @relation(fields: [stageId], references: [id])
+  stageId    String
+  order      Float      @default(0)         // orden dentro de la columna
+  notes      String?
+  owner      Staff?     @relation(fields: [ownerId], references: [id])
+  ownerId    String?                        // empleado responsable (vendedor)
+  closedAt   DateTime?                      // cuándo se ganó/perdió
+  createdAt  DateTime   @default(now())
+  activities DealActivity[]
+
+  @@index([stageId])
+  @@index([ownerId])
+}
+
+// Actividades / bitácora de un trato del embudo (llamadas, WhatsApp, correos, reuniones, notas, tareas)
+model DealActivity {
+  id        String   @id @default(cuid())
+  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  dealId    String
+  type      String                        // llamada | whatsapp | correo | reunion | nota | tarea
+  note      String?                       // detalle de la actividad
+  dueDate   DateTime?                     // si es tarea/recordatorio: cuándo
+  done      Boolean  @default(false)      // para tareas
+  followUpId String?                      // FollowUp ligado (si generó uno en Seguimientos)
+  staffId   String?                       // quién la registró
+  createdAt DateTime @default(now())
+  @@index([dealId])
+}
+
+// Etiquetas de cliente configurables (con reglas automáticas combinadas)
+model Tag {
+  id          String   @id @default(cuid())
+  name        String   @unique          // VIP, Frecuente, Nueva...
+  color       String   @default("plum")  // plum | gold | sage | blush | muted
+  priority    Int      @default(0)        // mayor = más importante (gana al asignar auto)
+  minVisits   Int?     // visitas/compras en el periodo para calificar (regla por frecuencia)
+  minSpend    Float?   // gasto en el periodo para calificar (regla por valor)
+  periodDays  Int      @default(30)       // ventana del periodo (días)
+  isDefault   Boolean  @default(false)    // etiqueta base si no califica a ninguna (ej. Nueva)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+// Promociones / cupones configurables por el admin
+model Promotion {
+  id        String   @id @default(cuid())
+  code      String   @unique          // ej. VERANO15
+  name      String                     // descripción visible
+  type      String   @default("percent") // percent | amount
+  value     Float                      // 15 (=15%) o 150 (=$150)
+  active    Boolean  @default(true)
+  birthday  Boolean  @default(false)   // si es el cupón a usar para mensajes de cumpleaños
+  scope     String   @default("general") // dónde aplica: pos (cupón) | crm (mensajes) | general (producto/checador)
+  createdAt DateTime @default(now())
+}
+
+// Caja chica / gastos del negocio
+model Expense {
+  id        String   @id @default(cuid())
+  amount    Float
+  category  String   @default("General") // Insumos | Servicios | Nómina | Renta | Salida de efectivo | Otro
+  note      String?
+  staffId   String?
+  sessionId String?  // si fue una salida de efectivo de caja, la sesión a la que afecta
+  date      DateTime @default(now())
+}
+
+// CRM: seguimiento / tarea sobre un cliente
+model FollowUp {
+  id        String   @id @default(cuid())
+  client    Client   @relation(fields: [clientId], references: [id])
+  clientId  String
+  title     String              // ej. "Llamar para reactivar"
+  dueDate   DateTime?           // fecha objetivo
+  done      Boolean  @default(false)
+  kind      String   @default("manual") // manual | riesgo | cumpleanos | trato
+  staffId   String?             // empleado responsable (recibe el recordatorio)
+  createdAt DateTime @default(now())
+
+  @@index([staffId])
+  @@index([done])
 }
 
 model ClinicalRecord {
@@ -69,6 +221,12 @@ model ClinicalRecord {
   clientId        String   @unique
   allergies       String?
   contraindications String?
+  // Datos clínicos estructurados
+  skinType        String?   // tipo de piel
+  conditions      String[]  @default([]) // embarazo, diabetes, hipertensión, etc. (banderas)
+  medications     String?   // medicamentos actuales
+  bloodType       String?
+  emergencyContact String?  // contacto de emergencia
   notes           ClinicalNote[]
 }
 
@@ -82,6 +240,23 @@ model ClinicalNote {
   title        String
   evolution    String?
   attachments  String[]       @default([])
+}
+
+// Bitácora de auditoría: quién hizo qué y cuándo (eventos)
+model AuditLog {
+  id        String   @id @default(cuid())
+  date      DateTime @default(now())
+  actorId   String?  // id del empleado que ejecutó la acción
+  actorName String   // nombre legible (se guarda al momento, sobrevive aunque borren al empleado)
+  module    String   // pos | compras | inventario | caja | personal | promociones | agenda | ...
+  action    String   // venta | cancelacion | compra | cambio_precio | corte | permisos | ...
+  summary   String   // resumen legible: "Venta #123 por $850 (efectivo)"
+  refId     String?  // id de la entidad afectada (venta, compra, producto...)
+  meta      Json?    // datos extra opcionales
+
+  @@index([date])
+  @@index([actorId])
+  @@index([module])
 }
 
 model Service {
@@ -101,7 +276,9 @@ model Supply {
   unit      String          @default("pza")
   stock     Float           @default(0)
   minStock  Float           @default(0)
+  cost      Float           @default(0) // costo promedio ponderado por unidad
   recipes   ServiceSupply[]
+  purchaseItems PurchaseItem[]
 }
 
 model ServiceSupply {
@@ -119,6 +296,107 @@ model Product {
   price    Float
   stock    Int    @default(0)
   minStock Int    @default(0)
+  cost     Float  @default(0) // costo promedio ponderado por unidad
+  barcode  String? @unique    // código de barras (EAN/UPC) para escanear en el POS
+  category String?            // categoría libre (ej. "Shampoo", "Cremas") para agrupar y precios por categoría
+  image    String?            // imagen del producto: URL o data URL (base64). Se muestra en checador y POS.
+  isBundle Boolean @default(false) // si es un paquete (ej. 12-pack) que descuenta componentes
+  station  String  @default("ninguna") // a dónde va la comanda: cocina | barra | ninguna
+  purchaseItems PurchaseItem[]
+  // Si es bundle: piezas que lo componen
+  components ProductComponent[] @relation("BundleOf")
+  // Si este producto es usado como pieza dentro de bundles
+  usedInBundles ProductComponent[] @relation("ComponentOf")
+  variants ProductVariant[]
+  stockLevels StockLevel[]
+}
+
+// Almacén o sucursal (opcional, según el ajuste usarAlmacenes).
+model Warehouse {
+  id        String   @id @default(cuid())
+  name      String                          // "Sucursal Centro", "Bodega Norte"...
+  address   String?
+  isDefault Boolean  @default(false)         // almacén principal
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  levels    StockLevel[]
+}
+
+// Stock de un producto en un almacén concreto. La suma por producto debe coincidir
+// con Product.stock (que sigue siendo el total que usa el POS).
+model StockLevel {
+  id          String    @id @default(cuid())
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId   String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  warehouseId String
+  qty         Int       @default(0)
+  @@unique([productId, warehouseId])
+  @@index([warehouseId])
+}
+
+// Componente de un paquete: el bundle X contiene Y unidades del producto Z
+model ProductComponent {
+  id         String  @id @default(cuid())
+  bundle     Product @relation("BundleOf", fields: [bundleId], references: [id], onDelete: Cascade)
+  bundleId   String
+  component  Product @relation("ComponentOf", fields: [componentId], references: [id])
+  componentId String
+  qty        Int     @default(1)
+  @@unique([bundleId, componentId])
+}
+
+// Variante de producto (Color/Talla/Sabor). Precio y stock propios opcionales.
+model ProductVariant {
+  id        String  @id @default(cuid())
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId String
+  name      String  // etiqueta combinada, ej. "Rojo · M"
+  options   Json?   // {Color:"Rojo", Talla:"M"} para combinaciones
+  price     Float?  // si null, usa el precio del producto base
+  stock     Int     @default(0)
+  sku       String?
+  active    Boolean @default(true)
+  @@index([productId])
+}
+
+// Proveedores
+model Supplier {
+  id        String     @id @default(cuid())
+  name      String
+  phone     String?
+  email     String?
+  notes     String?
+  active    Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  purchases Purchase[]
+}
+
+// Compras (entrada de insumos/productos al inventario con su costo)
+model Purchase {
+  id          String         @id @default(cuid())
+  supplier    Supplier?      @relation(fields: [supplierId], references: [id])
+  supplierId  String?
+  invoiceNo   String?        // folio/factura del proveedor
+  date        DateTime       @default(now())
+  total       Float          @default(0)
+  notes       String?
+  staffId     String?        // quién la registró
+  items       PurchaseItem[]
+}
+
+model PurchaseItem {
+  id         String   @id @default(cuid())
+  purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  purchaseId String
+  kind       String   // 'supply' | 'product'
+  supply     Supply?  @relation(fields: [supplyId], references: [id])
+  supplyId   String?
+  product    Product? @relation(fields: [productId], references: [id])
+  productId  String?
+  name       String   // nombre al momento de la compra
+  qty        Float
+  unitCost   Float    // costo unitario de compra
 }
 
 model Package {
@@ -127,6 +405,7 @@ model Package {
   sessions      Int
   price         Float
   validityMonths Int            @default(3)
+  active        Boolean         @default(true)
   clientPackages ClientPackage[]
 }
 
@@ -141,6 +420,7 @@ model ClientPackage {
   remaining  Int
   expiresAt  DateTime
   createdAt  DateTime @default(now())
+  @@index([clientId])        // paquetes activos de un cliente
 }
 
 model Appointment {
@@ -155,6 +435,9 @@ model Appointment {
   end          DateTime?
   status       AppointmentStatus @default(agendada)
   createdAt    DateTime          @default(now())
+  @@index([start])           // agenda del día / rango
+  @@index([staffId])         // agenda por especialista
+  @@index([clientId])        // citas de un cliente
 }
 
 model CashSession {
@@ -183,10 +466,20 @@ model Sale {
   subtotal    Float
   discount    Float         @default(0)
   creditUsed  Float         @default(0)
+  pointsRedeemed Int        @default(0)  // puntos canjeados en esta venta
+  pointsDiscount Float      @default(0)  // descuento en $ por canje de puntos
   total       Float
   paymentMethod PaymentMethod @default(efectivo)
-  points      Int           @default(0)
+  points      Int           @default(0) // puntos netos al saldo (ganados − canjeados)
+  voided      Boolean       @default(false) // ticket cancelado / devuelto
+  voidReason  String?       // motivo de la cancelación/devolución
+  voidedAt    DateTime?     // cuándo se canceló
   items       SaleItem[]
+  payments    SalePayment[]
+  @@index([clientId])     // historial del cliente, CRM, lealtad
+  @@index([date])         // reportes, corte de caja, finanzas por fecha
+  @@index([sessionId])    // corte de caja por sesión
+  @@index([cashierId])    // comisiones y ventas por cajera
 }
 
 model SaleItem {
@@ -200,4 +493,128 @@ model SaleItem {
   price       Float
   specialistId String?
   fromPackage Boolean @default(false)
+  @@index([saleId])        // cargar los renglones de una venta
+  @@index([specialistId])  // comisiones por especialista
+}
+
+model SalePayment {
+  id        String        @id @default(cuid())
+  sale      Sale          @relation(fields: [saleId], references: [id])
+  saleId    String
+  method    PaymentMethod
+  amount    Float
+
+  @@index([saleId])
+}
+
+// ---------- RESTAURANTE (opcional, según ajuste usarMesas) ----------
+model Table {
+  id        String   @id @default(cuid())
+  number    String                      // número o nombre de la mesa ("12", "Terraza 3")
+  zone      String?                     // zona: Salón, Terraza, Barra...
+  capacity  Int      @default(4)
+  order     Int      @default(0)         // orden de despliegue en el mapa
+  posX      Float    @default(40)        // posición en el mapa (px)
+  posY      Float    @default(40)
+  shape     String   @default("round")   // round | square — forma visual
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  orders    TableOrder[]
+}
+
+// Cuenta de una mesa. Pueden coexistir varias cuentas en una mesa (cuentas separadas).
+model TableOrder {
+  id        String   @id @default(cuid())
+  table     Table?   @relation(fields: [tableId], references: [id])
+  tableId   String?                       // null = comanda de mostrador / para llevar (POS)
+  kind      String   @default("mesa")     // mesa | llevar (origen de la comanda)
+  label     String?                      // "Cuenta 1", nombre del comensal...
+  status    String   @default("abierta") // abierta | cobrada | cancelada
+  openedAt  DateTime @default(now())
+  closedAt  DateTime?
+  staffId   String?                       // mesero que abrió
+  saleId    String?                       // venta generada al cobrar
+  items     TableOrderItem[]
+  @@index([tableId])
+  @@index([status])
+}
+
+model TableOrderItem {
+  id        String     @id @default(cuid())
+  order     TableOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId   String
+  productId String?                       // producto del catálogo (o servicio/platillo)
+  type      String     @default("producto") // producto | servicio
+  name      String
+  qty       Int        @default(1)
+  price     Float
+  variantId String?
+  note      String?                       // "sin cebolla", "término medio"
+  station   String     @default("ninguna") // cocina | barra | ninguna (copiado del producto)
+  kitchen   String     @default("pendiente") // pendiente | preparando | listo | entregado
+  sentAt    DateTime?                      // cuándo se mandó a la comanda
+  readyAt   DateTime?                      // cuándo la cocina lo marcó listo
+  createdAt DateTime   @default(now())
+  @@index([orderId])              // items de una cuenta
+  @@index([kitchen, station])     // pantalla de cocina (comandas pendientes)
+}
+
+// ---------- MÓDULO VENTAS: cotizaciones ----------
+model Quote {
+  id          String   @id @default(cuid())
+  folio       Int      @default(autoincrement())   // número de cotización legible
+  client      Client?  @relation(fields: [clientId], references: [id])
+  clientId    String?
+  clientName  String?                              // nombre libre si no hay cliente registrado
+  sellerId    String?                              // vendedor que la creó (Staff)
+  status      String   @default("borrador")        // borrador | enviada | aceptada | rechazada | vencida | convertida
+  subtotal    Float    @default(0)
+  discount    Float    @default(0)                 // descuento global en $
+  taxRate     Float    @default(0)                 // % de IVA aplicado (0 = sin IVA)
+  tax         Float    @default(0)                 // monto de impuesto
+  shipping    Float    @default(0)                 // costo de envío
+  shippingFree Boolean @default(false)             // true si el envío se marcó como gratis/cortesía
+  total       Float    @default(0)
+  notes       String?
+  validUntil  DateTime?                            // vigencia
+  saleId      String?                              // venta generada si se convirtió
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  items       QuoteItem[]
+  @@index([sellerId])
+  @@index([clientId])
+  @@index([status])
+}
+
+model QuoteItem {
+  id        String  @id @default(cuid())
+  quote     Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  quoteId   String
+  type      String  @default("producto")  // producto | servicio
+  refId     String?                        // id del producto/servicio del catálogo
+  name      String                         // nombre al momento de cotizar
+  qty       Float   @default(1)
+  price     Float                          // precio unitario (de la lista aplicada)
+  discount  Float   @default(0)            // descuento por línea en % (0-100)
+  @@index([quoteId])
+}
+
+// ---------- MÓDULO VENTAS: listas de precios ----------
+model PriceList {
+  id        String          @id @default(cuid())
+  name      String                            // "Mayoreo", "Menudeo", "Distribuidor"...
+  isDefault Boolean         @default(false)
+  active    Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  items     PriceListItem[]
+}
+
+model PriceListItem {
+  id          String    @id @default(cuid())
+  list        PriceList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  listId      String
+  productId   String                          // producto del catálogo
+  price       Float                           // precio especial en esta lista
+  @@unique([listId, productId])
+  @@index([listId])
 }

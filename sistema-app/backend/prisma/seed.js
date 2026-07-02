@@ -8,11 +8,11 @@ const addMonths = (n) => { const d = new Date(); d.setMonth(d.getMonth() + n); r
 async function main() {
   console.log('Sembrando datos...');
 
-  // Staff (claves PIN)
-  const admin = await prisma.staff.create({ data: { name: 'Saúl Valdez', pinHash: hash('1111'), role: 'admin' } });
-  const karla = await prisma.staff.create({ data: { name: 'Karla Núñez', pinHash: hash('2222'), role: 'empleada' } });
-  const lucia = await prisma.staff.create({ data: { name: 'Lucía Rivera', pinHash: hash('3333'), role: 'empleada', specialty: 'Faciales', commissionRate: 0.12 } });
-  const daniela = await prisma.staff.create({ data: { name: 'Daniela Mora', pinHash: hash('4444'), role: 'empleada', specialty: 'Masajes', commissionRate: 0.12 } });
+  // Staff: correo + contraseña (login del sistema) y PIN (para el POS)
+  const admin = await prisma.staff.create({ data: { name: 'Saúl Valdez', email: 'admin@seren.com', passwordHash: hash('admin123'), pinHash: hash('1111'), role: 'admin' } });
+  const karla = await prisma.staff.create({ data: { name: 'Karla Núñez', email: 'karla@seren.com', passwordHash: hash('karla123'), pinHash: hash('2222'), role: 'empleada' } });
+  const lucia = await prisma.staff.create({ data: { name: 'Lucía Rivera', email: 'lucia@seren.com', passwordHash: hash('lucia123'), pinHash: hash('3333'), role: 'empleada', specialty: 'Faciales', commissionRate: 0.12 } });
+  const daniela = await prisma.staff.create({ data: { name: 'Daniela Mora', email: 'daniela@seren.com', passwordHash: hash('daniela123'), pinHash: hash('4444'), role: 'empleada', specialty: 'Masajes', commissionRate: 0.12 } });
 
   // Insumos
   const su1 = await prisma.supply.create({ data: { name: 'Mascarilla hidratante', category: 'Facial', unit: 'pza', stock: 3, minStock: 10 } });

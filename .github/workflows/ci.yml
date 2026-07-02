@@ -1,0 +1,62 @@
+name: CI
+
+# Corre en cada push y en cada Pull Request hacia main.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Pruebas del backend
+    runs-on: ubuntu-latest
+
+    # Base de datos PostgreSQL temporal solo para las pruebas
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: seren
+          POSTGRES_PASSWORD: seren
+          POSTGRES_DB: seren_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U seren"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: "postgresql://seren:seren@127.0.0.1:5433/seren_test"
+      TEST_DATABASE_URL: "postgresql://seren:seren@127.0.0.1:5433/seren_test"
+      JWT_SECRET: "ci-secreto-de-prueba-no-usar-en-produccion-1234567890"
+      NODE_ENV: "test"
+
+    defaults:
+      run:
+        working-directory: sistema-app/backend
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: sistema-app/backend/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Preparar base de datos de prueba (migraciones)
+        run: npx prisma migrate deploy
+
+      - name: Cargar datos de ejemplo (seed)
+        run: npm run seed
+
+      - name: Correr las pruebas
+        run: npm test

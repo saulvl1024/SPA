@@ -62,6 +62,8 @@ r.post('/', async (req, res) => {
       const supplyMap = new Map(supplyRows.map(s => [s.id, s]));
       const productMap = new Map(productRows.map(p => [p.id, p]));
 
+      // Redondeo a centavos para montos guardados (evita deriva de coma flotante).
+      const c2 = n => Math.round((Number(n) || 0) * 100) / 100;
       for (const i of items) {
         const qty = Number(i.qty); const unitCost = Number(i.unitCost);
         if (!(qty > 0) || !(unitCost >= 0)) throw new Error('Cantidad o costo inválido');
@@ -72,20 +74,20 @@ r.post('/', async (req, res) => {
           if (!s) throw new Error('Insumo inválido');
           // Promedio ponderado: (valor_actual + valor_compra) / (stock_actual + qty)
           const newStock = s.stock + qty;
-          const avg = newStock > 0 ? (s.stock * s.cost + qty * unitCost) / newStock : unitCost;
+          const avg = newStock > 0 ? c2((s.stock * s.cost + qty * unitCost) / newStock) : c2(unitCost);
           await tx.supply.update({ where: { id: s.id }, data: { stock: newStock, cost: avg } });
           created.push({ kind: 'supply', supplyId: s.id, name: s.name, qty, unitCost });
         } else if (i.kind === 'product') {
           const p = productMap.get(i.productId);
           if (!p) throw new Error('Producto inválido');
           const newStock = p.stock + qty;
-          const avg = newStock > 0 ? (p.stock * p.cost + qty * unitCost) / newStock : unitCost;
+          const avg = newStock > 0 ? c2((p.stock * p.cost + qty * unitCost) / newStock) : c2(unitCost);
           await tx.product.update({ where: { id: p.id }, data: { stock: Math.round(newStock), cost: avg } });
           created.push({ kind: 'product', productId: p.id, name: p.name, qty, unitCost });
         } else throw new Error('Tipo de artículo inválido');
       }
       return tx.purchase.create({
-        data: { supplierId: supplierId || null, invoiceNo: invoiceNo || null, notes: notes || null, total, staffId: req.user.id, items: { create: created } },
+        data: { supplierId: supplierId || null, invoiceNo: invoiceNo || null, notes: notes || null, total: c2(total), staffId: req.user.id, items: { create: created } },
         include: { supplier: true, items: true },
       });
     });

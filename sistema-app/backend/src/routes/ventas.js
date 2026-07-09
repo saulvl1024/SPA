@@ -12,26 +12,29 @@ const isAdmin = req => req.user?.role === 'admin' || req.user?.role === 'superad
 // Calcula los totales de una cotización (servidor = fuente de verdad).
 // El envío gratis por umbral lo decide el servidor según la config del negocio,
 // no se confía en lo que mande el cliente.
+// Redondeo a centavos para evitar deriva de coma flotante en los montos guardados.
+const c2 = n => Math.round((Number(n) || 0) * 100) / 100;
+
 function quoteTotals(items, globalDiscount = 0, taxRate = 0, shippingInput = 0, freeInput = false, freeThreshold = 0) {
-  const subtotal = items.reduce((a, i) => {
+  const subtotal = c2(items.reduce((a, i) => {
     const linea = (Number(i.price) || 0) * (Number(i.qty) || 0);
     const desc = linea * (Math.min(100, Math.max(0, Number(i.discount) || 0)) / 100);
-    return a + (linea - desc);
-  }, 0);
-  const baseTrasDesc = Math.max(0, subtotal - (Number(globalDiscount) || 0));
-  const tax = baseTrasDesc * (Math.max(0, Number(taxRate) || 0) / 100);
+    return a + c2(linea - desc);
+  }, 0));
+  const baseTrasDesc = c2(Math.max(0, subtotal - (Number(globalDiscount) || 0)));
+  const tax = c2(baseTrasDesc * (Math.max(0, Number(taxRate) || 0) / 100));
 
   // Envío: gratis si el negocio configuró un umbral y el subtotal lo alcanza,
   // o si el usuario lo marcó como cortesía manualmente.
   const umbral = Number(freeThreshold) || 0;
   const alcanzaUmbral = umbral > 0 && subtotal >= umbral;
   const shippingFree = !!freeInput || alcanzaUmbral;
-  const shipping = shippingFree ? 0 : Math.max(0, Number(shippingInput) || 0);
+  const shipping = shippingFree ? 0 : c2(Math.max(0, Number(shippingInput) || 0));
 
   return {
-    subtotal, discount: Number(globalDiscount) || 0, taxRate: Number(taxRate) || 0, tax,
+    subtotal, discount: c2(Number(globalDiscount) || 0), taxRate: Number(taxRate) || 0, tax,
     shipping, shippingFree,
-    total: baseTrasDesc + tax + shipping,
+    total: c2(baseTrasDesc + tax + shipping),
   };
 }
 

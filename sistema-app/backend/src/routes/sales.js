@@ -202,16 +202,30 @@ r.post('/', async (req, res) => {
         });
       }
 
+      // Decremento ATÓMICO de stock: la condición `stock >= qty` va DENTRO del UPDATE,
+      // así dos cobros simultáneos de la última pieza no pueden dejar stock negativo (anti-sobreventa).
+      // Con allowZeroStock activo se permite bajar de 0 (venta bajo pedido), como antes.
+      async function decProduct(id, qty, label) {
+        if (allowZeroStock) { await tx.product.update({ where: { id }, data: { stock: { decrement: qty } } }); return; }
+        const r = await tx.product.updateMany({ where: { id, stock: { gte: qty } }, data: { stock: { decrement: qty } } });
+        if (r.count === 0) throw new Error(`Sin stock suficiente de ${label}`);
+      }
+      async function decVariant(id, qty, label) {
+        if (allowZeroStock) { await tx.productVariant.update({ where: { id }, data: { stock: { decrement: qty } } }); return; }
+        const r = await tx.productVariant.updateMany({ where: { id, stock: { gte: qty } }, data: { stock: { decrement: qty } } });
+        if (r.count === 0) throw new Error(`Sin stock suficiente de ${label}`);
+      }
+
       // Aplica efectos en inventario, paquetes y saldo
       for (const i of safeItems) {
         if (i.type === 'producto') {
           if (i.variantId) {
-            await tx.productVariant.update({ where: { id: i.variantId }, data: { stock: { decrement: i.qty } } });
+            await decVariant(i.variantId, i.qty, i.name);
           } else if (i.isBundle && i.components) {
             // Descuenta cada componente: qty del paquete × qty del componente
-            for (const c of i.components) { await tx.product.update({ where: { id: c.componentId }, data: { stock: { decrement: c.qty * i.qty } } }); await decWarehouse(c.componentId, c.qty * i.qty); }
+            for (const c of i.components) { await decProduct(c.componentId, c.qty * i.qty, i.name); await decWarehouse(c.componentId, c.qty * i.qty); }
           } else {
-            await tx.product.update({ where: { id: i.refId }, data: { stock: { decrement: i.qty } } });
+            await decProduct(i.refId, i.qty, i.name);
             await decWarehouse(i.refId, i.qty);
           }
         }

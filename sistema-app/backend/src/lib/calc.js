@@ -36,13 +36,17 @@ export function summarizeCash(sales = [], fondo = 0, cashOut = 0) {
  * @param {boolean} p.useCredit - si aplica saldo a favor
  * @param {number} p.clientCredit - saldo a favor disponible del cliente
  */
+// Redondeo a centavos: elimina la deriva de coma flotante (p. ej. 0.1+0.2 = 0.30000000000000004).
+// Cada monto queda exacto al centavo; sus sumas se mantienen exactas a la escala de un negocio.
+const c2 = n => Math.round((Number(n) || 0) * 100) / 100;
+
 export function saleTotals({
   items = [], discount = 0, useCredit = false, clientCredit = 0,
   redeemPoints = 0, clientPoints = 0,
   pointsPerCurrency = 0.1, redeemValue = 0.5, minRedeem = 100,
 }) {
-  const subtotal = items.reduce((a, i) => a + (Number(i.price) || 0) * (Number(i.qty) || 1), 0);
-  const disc = Math.min(subtotal, Math.max(0, Number(discount) || 0));
+  const subtotal = c2(items.reduce((a, i) => a + c2((Number(i.price) || 0) * (Number(i.qty) || 1)), 0));
+  const disc = c2(Math.min(subtotal, Math.max(0, Number(discount) || 0)));
 
   // Canje de puntos por descuento (no puede exceder puntos disponibles ni el restante a pagar)
   let pointsRedeemed = 0, pointsDiscount = 0;
@@ -51,11 +55,11 @@ export function saleTotals({
     const restante = subtotal - disc;
     const maxByMoney = Math.floor(restante / (redeemValue || 1)); // puntos que caben en lo que falta pagar
     pointsRedeemed = Math.min(want, maxByMoney);
-    pointsDiscount = pointsRedeemed * (redeemValue || 0);
+    pointsDiscount = c2(pointsRedeemed * (redeemValue || 0));
   }
 
-  const creditUsed = useCredit ? Math.min(clientCredit, subtotal - disc - pointsDiscount) : 0;
-  const total = subtotal - disc - pointsDiscount - creditUsed;
+  const creditUsed = c2(useCredit ? Math.min(clientCredit, subtotal - disc - pointsDiscount) : 0);
+  const total = c2(subtotal - disc - pointsDiscount - creditUsed);
   // Puntos GANADOS según la tasa configurable (sobre lo efectivamente pagado)
   const earned = Math.max(0, Math.floor(total * (pointsPerCurrency || 0)));
   // points = neto al saldo del cliente (gana − canjeados)

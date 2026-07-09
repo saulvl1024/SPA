@@ -64,6 +64,23 @@ describe('saleTotals (totales del POS)', () => {
     expect(t.discount).toBe(100);
     expect(t.total).toBe(0);
   });
+
+  it('redondea a centavos: sin deriva de coma flotante', () => {
+    // 0.10 x 3 en float da 0.30000000000000004; debe quedar exacto en 0.3
+    const a = saleTotals({ items: [{ price: 0.10, qty: 3 }] });
+    expect(a.subtotal).toBe(0.3);
+    expect(a.total).toBe(0.3);
+    // 19.99 x 3 = 59.97 exacto
+    const b = saleTotals({ items: [{ price: 19.99, qty: 3 }] });
+    expect(b.total).toBe(59.97);
+  });
+
+  it('canje de puntos: total exacto y puntos netos negativos', () => {
+    const t = saleTotals({ items: [{ price: 100, qty: 1 }], redeemPoints: 200, clientPoints: 200, redeemValue: 0.5, minRedeem: 100, pointsPerCurrency: 0.1 });
+    expect(t.pointsDiscount).toBe(100);
+    expect(t.total).toBe(0);
+    expect(t.points).toBe(-200); // gana 0 (total 0) − canjea 200
+  });
 });
 
 describe('promoDiscount (cupones)', () => {

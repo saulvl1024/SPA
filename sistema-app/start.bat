@@ -19,4 +19,4 @@ start http://localhost:5173
 echo.
 echo Listo. Se abrieron dos ventanas (backend y frontend).
 echo Para detener: cierra esas dos ventanas.
-echo La app esta en http://localhost:5173 (clave admin: 1111)
+echo La app esta en http://localhost:5173 (admin@seren.com / admin123)

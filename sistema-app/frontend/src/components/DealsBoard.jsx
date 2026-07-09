@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { Modal, toast, money, initials } from '../ui.jsx';
 import Select from './Select.jsx';
 import DateField from './DateField.jsx';
+import ImportExport from './ImportExport.jsx';
 
 // Tipos de actividad (texto formal, sin emojis)
 const ACT_LABELS = { llamada: 'Llamada', whatsapp: 'WhatsApp', correo: 'Correo', reunion: 'Reunión / Visita', nota: 'Nota', tarea: 'Tarea / Recordatorio' };
@@ -50,15 +51,19 @@ export default function DealsBoard() {
   const [dragId, setDragId] = useState(null);
   const [overStage, setOverStage] = useState(null);
   const [moveDeal, setMoveDeal] = useState(null); // trato a mover en móvil (selector de etapa)
+  const [pipeline, setPipeline] = useState('b2c'); // embudo activo: b2c | b2b
+  const [stageForm, setStageForm] = useState(null); // crear/renombrar etapa: { id?, name }
 
-  const load = (owner = ownerFilter) => {
-    const qs = owner ? '?ownerId=' + owner : '';
+  const load = (owner = ownerFilter, pipe = pipeline) => {
+    const params = new URLSearchParams({ pipeline: pipe });
+    if (owner) params.set('ownerId', owner);
+    const qs = '?' + params.toString();
     api.get('/deals/board' + qs)
       .then(d => { setBoard(d.stages); if (d.sellers) setSellers(d.sellers); })
       .catch(e => toast(e.message, 'bad'));
     api.get('/deals/metrics' + qs).then(setMetrics).catch(() => {});
   };
-  useEffect(() => { load(); }, [ownerFilter]); // eslint-disable-line
+  useEffect(() => { load(); setMobileStage(0); }, [ownerFilter, pipeline]); // eslint-disable-line
   // Carga la lista de clientes una vez; el buscador del Select filtra sobre ella.
   useEffect(() => { api.get('/clients?take=1000').then(setClients).catch(() => {}); }, []);
 
@@ -77,7 +82,7 @@ export default function DealsBoard() {
   async function moveTo(stageId) {
     const id = moveDeal?.id; setMoveDeal(null);
     if (!id) return;
-    try { await api.patch(`/deals/${id}/move`, { stageId }); load(); toast('Trato movido', 'ok'); }
+    try { await api.patch(`/deals/${id}/move`, { stageId }); load(); toast('Oportunidad movida', 'ok'); }
     catch (e) { toast(e.message, 'bad'); }
   }
 
@@ -85,12 +90,25 @@ export default function DealsBoard() {
     try {
       if (!form.title?.trim()) return toast('Falta el título', 'bad');
       if (form.id) await api.put('/deals/' + form.id, form);
-      else await api.post('/deals', form);
-      setForm(null); load(); toast('Trato guardado', 'ok');
+      else await api.post('/deals', { ...form, pipeline }); // crea en el embudo activo
+      setForm(null); load(); toast('Oportunidad guardada', 'ok');
     } catch (e) { toast(e.message, 'bad'); }
   }
+  async function saveStage() {
+    if (!stageForm.name?.trim()) return toast('Falta el nombre de la etapa', 'bad');
+    try {
+      if (stageForm.id) await api.put('/deals/stages/' + stageForm.id, { name: stageForm.name });
+      else await api.post('/deals/stages', { name: stageForm.name, pipeline });
+      setStageForm(null); load(); toast('Etapa guardada', 'ok');
+    } catch (e) { toast(e.message, 'bad'); }
+  }
+  async function delStage(st) {
+    if (!confirm('¿Eliminar la etapa "' + st.name + '"? (debe estar vacía)')) return;
+    try { await api.del('/deals/stages/' + st.id); load(); toast('Etapa eliminada', 'ok'); }
+    catch (e) { toast(e.message, 'bad'); }
+  }
   async function remove() {
-    try { await api.del('/deals/' + form.id); setForm(null); load(); toast('Trato eliminado', 'ok'); }
+    try { await api.del('/deals/' + form.id); setForm(null); load(); toast('Oportunidad eliminada', 'ok'); }
     catch (e) { toast(e.message, 'bad'); }
   }
 
@@ -155,12 +173,22 @@ export default function DealsBoard() {
 
   return (
     <>
+      {/* Sub-pestañas: dos embudos separados */}
+      <div className="pipe-tabs mb">
+        <button className={'pipe-tab' + (pipeline === 'b2c' ? ' on' : '')} onClick={() => setPipeline('b2c')}>
+          <b>B2C</b><span>Consumidor final</span>
+        </button>
+        <button className={'pipe-tab' + (pipeline === 'b2b' ? ' on' : '')} onClick={() => setPipeline('b2b')}>
+          <b>B2B</b><span>Empresas</span>
+        </button>
+      </div>
+
       {/* Resumen del embudo */}
       <div className="stat-row mb">
-        <div className="stat"><div className="lbl">Embudo abierto</div><div className="val" style={{ color: 'var(--plum)' }}>{money(pipelineTotal)}</div><div className="chg">{openCount} tratos en curso</div></div>
+        <div className="stat"><div className="lbl">Embudo abierto</div><div className="val" style={{ color: 'var(--plum)' }}>{money(pipelineTotal)}</div><div className="chg">{openCount} oportunidades en curso</div></div>
         <div className="stat"><div className="lbl">Ganado</div><div className="val" style={{ color: 'var(--sage)' }}>{money(wonTotal)}</div></div>
         <div className="stat"><div className="lbl">Conversión</div><div className="val">{metrics ? metrics.winRate + '%' : '—'}</div><div className="chg">{metrics ? `${metrics.wonCount} ganados · ${metrics.lostCount} perdidos` : ''}</div></div>
-        <div className="stat"><div className="lbl">Cierre promedio</div><div className="val">{metrics ? metrics.avgCloseDays : '—'}<span style={{ fontSize: '.5em', marginLeft: 4 }}>días</span></div><div className="chg">de los tratos ganados</div></div>
+        <div className="stat"><div className="lbl">Cierre promedio</div><div className="val">{metrics ? metrics.avgCloseDays : '—'}<span style={{ fontSize: '.5em', marginLeft: 4 }}>días</span></div><div className="chg">de las oportunidades ganadas</div></div>
       </div>
 
       {/* Métricas por etapa (desplegable) */}
@@ -191,7 +219,7 @@ export default function DealsBoard() {
                       </div>
                       <div className="metric-bar"><span className="metric-bar-fill" style={{ width: pct + '%', background: barColor }} /></div>
                       <div className="metric-meta">
-                        <span>{s.count} trato{s.count !== 1 ? 's' : ''}</span>
+                        <span>{s.count} oportunidad{s.count !== 1 ? 'es' : ''}</span>
                         {!closed && <span style={{ color: daysColor }}>{s.avgDays === 0 ? 'hoy' : s.avgDays + ' días prom.'}</span>}
                       </div>
                     </div>
@@ -211,7 +239,17 @@ export default function DealsBoard() {
                 options={[{ value: '', label: 'Todos los vendedores' }, ...sellers.map(s => ({ value: s.id, label: s.name }))]} />
             </div>
           : <span />}
-        <button className="btn embudo-new" onClick={() => setForm({ title: '', amount: '', clientId: '', contactName: '', notes: '' })}>Nuevo trato</button>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <ImportExport exportUrl="/deals/export" importUrl="/deals/import" filename="oportunidades" label="oportunidades"
+            columns={[
+              { key: 'title', label: 'Oportunidad' }, { key: 'amount', label: 'Monto' },
+              { key: 'cliente', label: 'Cliente' }, { key: 'telefono', label: 'Teléfono' },
+              { key: 'etapa', label: 'Etapa' }, { key: 'embudo', label: 'Embudo' },
+              { key: 'notes', label: 'Notas' },
+            ]} onDone={() => load()} />
+          <button className="btn ghost" onClick={() => setStageForm({ name: '' })}>＋ Etapa</button>
+          <button className="btn embudo-new" onClick={() => setForm({ title: '', amount: '', clientId: '', contactName: '', notes: '' })}>Nueva oportunidad</button>
+        </div>
       </div>
 
       {isMobile ? (
@@ -242,7 +280,7 @@ export default function DealsBoard() {
                   <span className="muted" style={{ fontSize: '.85rem' }}>{stage.count} · {money(stage.total)}</span>
                 </div>
                 {stage.deals.map(d => Card(d, stage))}
-                {!stage.deals.length && <div className="muted" style={{ fontSize: '.85rem', textAlign: 'center', padding: '32px 12px', border: '1.5px dashed var(--line)', borderRadius: 14 }}>Sin tratos en esta etapa.</div>}
+                {!stage.deals.length && <div className="muted" style={{ fontSize: '.85rem', textAlign: 'center', padding: '32px 12px', border: '1.5px dashed var(--line)', borderRadius: 14 }}>Sin oportunidades en esta etapa.</div>}
               </div>
             );
           })()}
@@ -267,21 +305,41 @@ export default function DealsBoard() {
                 <div style={{ borderBottom: `2px solid ${stageColor(stage)}`, paddingBottom: 8, marginBottom: 10 }}>
                   <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
                     <b style={{ color: stageColor(stage), fontSize: '.9rem', letterSpacing: '.02em' }}>{stage.name}</b>
-                    <span style={{ background: stageColor(stage), color: '#fff', borderRadius: 999, padding: '1px 9px', fontSize: '.72rem', fontWeight: 600 }}>{stage.count}</span>
+                    <div className="row" style={{ gap: 4, alignItems: 'center' }}>
+                      {!stage.isWon && !stage.isLost && (
+                        <>
+                          <button className="deal-stage-btn" title="Renombrar" onClick={() => setStageForm({ id: stage.id, name: stage.name })}>✎</button>
+                          <button className="deal-stage-btn" title="Eliminar etapa" onClick={() => delStage(stage)}>×</button>
+                        </>
+                      )}
+                      <span style={{ background: stageColor(stage), color: '#fff', borderRadius: 999, padding: '1px 9px', fontSize: '.72rem', fontWeight: 600 }}>{stage.count}</span>
+                    </div>
                   </div>
                   <div className="muted" style={{ fontSize: '.78rem', marginTop: 3 }}>{money(stage.total)}</div>
                 </div>
 
                 {stage.deals.map(d => Card(d, stage))}
-                {!stage.deals.length && <div className="muted" style={{ fontSize: '.76rem', textAlign: 'center', padding: '18px 8px', border: '1.5px dashed var(--line)', borderRadius: 12, lineHeight: 1.4 }}>Arrastra un trato aquí</div>}
+                {!stage.deals.length && <div className="muted" style={{ fontSize: '.76rem', textAlign: 'center', padding: '18px 8px', border: '1.5px dashed var(--line)', borderRadius: 12, lineHeight: 1.4 }}>Arrastra una oportunidad aquí</div>}
               </div>
             );
           })}
         </div>
       )}
 
+      {stageForm && (
+        <Modal title={stageForm.id ? 'Renombrar etapa' : 'Nueva etapa'} onClose={() => setStageForm(null)} width={420}>
+          <div className="field"><label>Nombre de la etapa</label>
+            <input value={stageForm.name} autoFocus placeholder="Ej. Demostración, Cotización enviada…"
+              onChange={e => setStageForm({ ...stageForm, name: e.target.value })}
+              onKeyDown={e => { if (e.key === 'Enter') saveStage(); }} />
+          </div>
+          {!stageForm.id && <p className="muted" style={{ fontSize: '.78rem' }}>Se agrega al embudo <b>{pipeline.toUpperCase()}</b>, antes de las etapas de cierre (Ganado/Perdido).</p>}
+          <div className="modal-actions"><button className="btn ghost" onClick={() => setStageForm(null)}>Cancelar</button><button className="btn" onClick={saveStage}>Guardar</button></div>
+        </Modal>
+      )}
+
       {moveDeal && (
-        <Modal title="Mover trato" onClose={() => setMoveDeal(null)}>
+        <Modal title="Mover oportunidad" onClose={() => setMoveDeal(null)}>
           <p className="muted mb" style={{ fontSize: '.86rem' }}>Mover <b style={{ color: 'var(--ink)' }}>{moveDeal.title}</b> a la etapa:</p>
           <div style={{ display: 'grid', gap: 8 }}>
             {board.map(s => (
@@ -299,7 +357,7 @@ export default function DealsBoard() {
       )}
 
       {form && (
-        <Modal title={form.id ? 'Editar trato' : 'Nuevo trato'} onClose={() => setForm(null)} width={form.id ? 760 : 520}>
+        <Modal title={form.id ? 'Editar oportunidad' : 'Nueva oportunidad'} onClose={() => setForm(null)} width={form.id ? 760 : 520}>
           <div className={form.id ? 'deal-modal-grid' : ''}>
             {/* Columna izquierda: datos del trato */}
             <div className="deal-modal-info">
@@ -342,7 +400,7 @@ export default function DealsBoard() {
                 </div>
                 {newAct.type === 'tarea' && (
                   <div className="muted" style={{ fontSize: '.72rem', marginTop: -2, marginBottom: 4 }}>
-                    {form.clientId ? 'Esta tarea aparecerá también en la pestaña Seguimientos.' : 'Asigna un cliente al trato para que la tarea aparezca en Seguimientos.'}
+                    {form.clientId ? 'Esta tarea aparecerá también en la pestaña Seguimientos.' : 'Asigna un cliente a la oportunidad para que la tarea aparezca en Seguimientos.'}
                   </div>
                 )}
 

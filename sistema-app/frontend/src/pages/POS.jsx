@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 import { Modal, toast, money, initials, matches } from '../ui.jsx';
 import { useAuth } from '../auth.jsx';
-import { businessName, setting } from '../permissions.js';
+import { businessName, businessLogo, businessInfo, setting } from '../permissions.js';
 import Tabs from '../components/Tabs.jsx';
 import Select from '../components/Select.jsx';
 import BarcodeScanner from '../components/BarcodeScanner.jsx';
@@ -27,6 +27,9 @@ export default function POS() {
   const [useCredit, setUseCredit] = useState(false);
   const [payments, setPayments] = useState([{ method: 'efectivo', amount: '' }]);
   const [paga, setPaga] = useState(''); // con cuánto paga el cliente (efectivo)
+  const [tipMode, setTipMode] = useState('pct'); // 'pct' | 'custom'
+  const [tipPct, setTipPct] = useState(0);       // porcentaje de propina
+  const [tipCustom, setTipCustom] = useState(''); // monto libre de propina
   const [anticipo, setAnticipo] = useState('');
   const [ticket, setTicket] = useState(null);
   const [tickets, setTickets] = useState(false);  // buscador de tickets anteriores
@@ -105,14 +108,22 @@ export default function POS() {
   const total = sub - disc - pointsDiscount - creditUsed;
   const ppc = loyalty?.pointsPerCurrency ?? 0.1;
   const pts = Math.max(0, Math.floor(total * ppc)) - redeemedPts; // neto al saldo
+  // Propina: se suma al total a cobrar pero no cuenta como ingreso ni genera puntos
+  const tipEnabled = setting('tipEnabled', false);
+  const tipAmount = tipEnabled && total > 0 ? Math.max(0, Math.round((tipMode === 'pct'
+    ? total * (Number(tipPct) || 0) / 100
+    : (Number(tipCustom) || 0)) * 100) / 100) : 0;
+  const grandTotal = Math.round((total + tipAmount) * 100) / 100;
+  const tipSuggested = Number(setting('tipSuggested', 10)) || 10;
+  const tipChips = [0, ...new Set([tipSuggested, 15, 20])].filter((v, i, a) => a.indexOf(v) === i);
   const pagaNum = parseFloat(paga) || 0;
   const paymentTotal = payments.reduce((a, p) => a + (parseFloat(p.amount) || 0), 0);
-  const missing = Math.max(0, total - paymentTotal);
-  const overpaid = Math.max(0, paymentTotal - total);
+  const missing = Math.max(0, grandTotal - paymentTotal);
+  const overpaid = Math.max(0, paymentTotal - grandTotal);
   const cashDue = payments.filter(p => p.method === 'efectivo').reduce((a, p) => a + (parseFloat(p.amount) || 0), 0);
   const cambio = pagaNum > 0 ? pagaNum - cashDue : 0;
-  const canCheckout = total <= 0 ? cart.length > 0 : cart.length > 0
-    && Math.round(paymentTotal * 100) === Math.round(total * 100)
+  const canCheckout = grandTotal <= 0 ? cart.length > 0 : cart.length > 0
+    && Math.round(paymentTotal * 100) === Math.round(grandTotal * 100)
     && payments.every(p => p.method && (parseFloat(p.amount) || 0) > 0)
     && !(cashDue > 0 && pagaNum > 0 && cambio < 0);
 
@@ -231,16 +242,16 @@ export default function POS() {
 
   async function checkout() {
     try {
-      const cleanPayments = total > 0 ? payments.map(p => ({ method: p.method, amount: parseFloat(p.amount) || 0 })) : [];
+      const cleanPayments = grandTotal > 0 ? payments.map(p => ({ method: p.method, amount: parseFloat(p.amount) || 0 })) : [];
       const sale = await api.post('/sales', {
         clientId, sessionId: session.id,
         items: cart.map(i => ({ type: i.type, refId: i.refId, name: i.name, qty: i.qty, price: i.price, fromPackage: i.fromPackage, packageId: i.packageId, specialistId: i.specialistId || null })),
-        discount: disc, useCredit, redeemPoints: redeemedPts, paymentMethod: cleanPayments[0]?.method || 'efectivo', payments: cleanPayments,
+        discount: disc, useCredit, redeemPoints: redeemedPts, tip: tipAmount, paymentMethod: cleanPayments[0]?.method || 'efectivo', payments: cleanPayments,
       });
       // Si se mandó comanda a cocina (para llevar), ciérrala al cobrar
       if (kdsOrderId) { api.post(`/kitchen/takeaway/${kdsOrderId}/close`, { saleId: sale.id }).catch(() => {}); setKdsOrderId(null); }
-      setTicket({ ...sale, clientName: client?.name || sale.client?.name || 'Mostrador', cashier: user.name, method: paymentLabel(sale.payments?.length ? sale.payments : cleanPayments), pts, paga: pagaNum, cambio, cashDue });
-      setCart([]); setDiscPct(0); setUseCredit(false); setPaga(''); setPromoId(''); setRedeemPts(0);
+      setTicket({ ...sale, clientName: client?.name || sale.client?.name || 'Mostrador', cashier: user.name, method: paymentLabel(sale.payments?.length ? sale.payments : cleanPayments), pts, tip: tipAmount, paga: pagaNum, cambio, cashDue });
+      setCart([]); setDiscPct(0); setUseCredit(false); setPaga(''); setPromoId(''); setRedeemPts(0); setTipPct(0); setTipCustom(''); setTipMode('pct');
       setPayments([{ method: 'efectivo', amount: '' }]);
       // Refresca datos en vivo tras la venta: clientes (saldo/puntos), productos (stock) y la caja (totales del corte)
       api.get('/clients').then(setClients);
@@ -251,7 +262,7 @@ export default function POS() {
     } catch (e) { toast(e.message, 'bad'); }
   }
 
-  useEffect(() => { syncSinglePayment(total); }, [total]);
+  useEffect(() => { syncSinglePayment(grandTotal); }, [grandTotal]);
 
   async function openCaja() {
     try {
@@ -445,7 +456,29 @@ export default function POS() {
               </div>
             )}
             <div className="tot"><span className="muted">Puntos {redeemedPts > 0 ? '(neto)' : 'a ganar'}</span><span>{pts >= 0 ? '+' : ''}{pts}</span></div>
-            <div className="tot grand"><span>Total</span><span>{money(total)}</span></div>
+            {tipEnabled && total > 0 && (
+              <div className="tot" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8, borderTop: '1px dashed var(--line)', paddingTop: 10 }}>
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', margin: 0 }}>
+                  <span className="muted">Propina</span>
+                  <b>{tipAmount > 0 ? '+' + money(tipAmount) : money(0)}</b>
+                </div>
+                <div className="row" style={{ gap: 6, flexWrap: 'wrap', margin: 0 }}>
+                  {tipChips.map(p => (
+                    <button key={p} type="button"
+                      className={'btn sm ' + (tipMode === 'pct' && Number(tipPct) === p ? '' : 'ghost')}
+                      onClick={() => { setTipMode('pct'); setTipPct(p); setTipCustom(''); }}>
+                      {p === 0 ? 'Sin propina' : p + '%'}
+                    </button>
+                  ))}
+                  <input type="number" min="0" inputMode="decimal" placeholder="Otro $"
+                    value={tipMode === 'custom' ? tipCustom : ''}
+                    onChange={e => { setTipMode('custom'); setTipCustom(e.target.value); setTipPct(0); }}
+                    style={{ width: 90, padding: '4px 8px' }} />
+                </div>
+              </div>
+            )}
+            {tipAmount > 0 && <div className="tot"><span className="muted">Subtotal</span><span>{money(total)}</span></div>}
+            <div className="tot grand"><span>{tipAmount > 0 ? 'Total a cobrar' : 'Total'}</span><span>{money(grandTotal)}</span></div>
           </div>
           {cashDue > 0 && cart.length > 0 && (
             <div style={{ marginTop: 12, padding: 12, background: 'var(--cream)', borderRadius: 12 }}>
@@ -473,7 +506,7 @@ export default function POS() {
           {kdsOrderId && <div className="muted" style={{ fontSize: '.78rem', textAlign: 'center', marginTop: 6 }}>Comanda enviada a la pantalla de cocina · se cerrará al cobrar</div>}
           <button className="btn btn-pay" style={{ width: '100%', justifyContent: 'center', marginTop: 12 }}
             disabled={!canCheckout}
-            onClick={checkout}>Cobrar · {money(total)}</button>
+            onClick={checkout}>Cobrar · {money(grandTotal)}</button>
         </div>
       </div>
 
@@ -552,17 +585,20 @@ function CorteModal({ cut, onClose }) {
 function TicketModal({ t, onClose }) {
   const { user } = useAuth();
   const isAdmin = user.role === 'admin' || user.role === 'superadmin';
+  const requirePin = setting('pinCancelSale', false);   // ¿el negocio exige PIN de gerente para cancelar?
   const [voiding, setVoiding] = useState(false);   // mostrando el campo de motivo
   const [reason, setReason] = useState('');
+  const [mgrPin, setMgrPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [voided, setVoided] = useState(t.voided);
 
   async function doVoid() {
     if (!reason.trim()) return toast('Indica el motivo', 'bad');
+    if (requirePin && !mgrPin.trim()) return toast('Ingresa el PIN de un gerente', 'bad');
     setBusy(true);
     try {
-      await api.post(`/sales/${t.id}/void`, { reason: reason.trim() });
-      setVoided(true); setVoiding(false);
+      await api.post(`/sales/${t.id}/void`, { reason: reason.trim(), managerPin: mgrPin.trim() });
+      setVoided(true); setVoiding(false); setMgrPin('');
       toast('Ticket cancelado · producto devuelto a stock', 'ok');
     } catch (e) { toast(e.message, 'bad'); }
     finally { setBusy(false); }
@@ -573,8 +609,9 @@ function TicketModal({ t, onClose }) {
       <div id="ticket-print">
         {voided && <div className="ticket-voided">CANCELADO{t.voidReason ? ' · ' + t.voidReason : ''}</div>}
         <div style={{ textAlign: 'center' }}>
+          {businessLogo() && <img className="doc-logo" src={businessLogo()} alt="Logo" />}
           <div className="serif" style={{ fontSize: '1.6rem', letterSpacing: '.12em', fontWeight: 600 }}>{businessName()}</div>
-          <div className="muted" style={{ fontSize: 11 }}>Ticket de compra</div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>Ticket de compra</div>
         </div>
         <hr style={{ border: 'none', borderTop: '1px dashed #ccc', margin: '10px 0' }} />
         <div className="tot"><span>Ticket</span><span>#{t.ticketNo}</span></div>
@@ -588,6 +625,7 @@ function TicketModal({ t, onClose }) {
         {t.discount > 0 && <div className="tot"><span>Descuento</span><span>−{money(t.discount)}</span></div>}
         {t.pointsDiscount > 0 && <div className="tot"><span>Puntos canjeados ({t.pointsRedeemed})</span><span>−{money(t.pointsDiscount)}</span></div>}
         {t.creditUsed > 0 && <div className="tot"><span>Saldo aplicado</span><span>−{money(t.creditUsed)}</span></div>}
+        {t.tip > 0 && <div className="tot"><span>Propina</span><span>+{money(t.tip)}</span></div>}
         <div className="tot grand"><span>TOTAL</span><span>{money(t.total)}</span></div>
         <div className="tot"><span>Pago</span><span>{t.method}</span></div>
         {t.cashDue > 0 && t.paga > 0 && <>
@@ -595,18 +633,30 @@ function TicketModal({ t, onClose }) {
           <div className="tot"><span>Cambio</span><span>{money(t.cambio)}</span></div>
         </>}
         <div className="tot"><span>Puntos ganados</span><span>+{t.points}</span></div>
-        <p style={{ textAlign: 'center', color: 'var(--muted)', fontSize: 11, marginTop: 10 }}>¡Gracias por tu visita!</p>
+        <p style={{ textAlign: 'center', color: 'var(--muted)', fontSize: 11, marginTop: 10 }}>{businessInfo().ticketFooter || '¡Gracias por tu visita!'}</p>
+        {(() => { const b = businessInfo(); return (b.address || b.phone || b.rfc) ? (
+          <div style={{ textAlign: 'center', color: 'var(--muted)', fontSize: 10, marginTop: 8, lineHeight: 1.5, borderTop: '1px dashed #ccc', paddingTop: 8 }}>
+            {b.address && <div>{b.address}</div>}
+            {(b.phone || b.rfc) && <div>{[b.phone && `Tel. ${b.phone}`, b.rfc && `RFC ${b.rfc}`].filter(Boolean).join(' · ')}</div>}
+          </div>
+        ) : null; })()}
       </div>
-      {/* Cancelación (solo admin) */}
+      {/* Cancelación / devolución */}
       {voiding && !voided && (
         <div className="no-print" style={{ borderTop: '1px solid var(--line)', paddingTop: 12, marginTop: 8 }}>
           <div className="field"><label>Motivo de la cancelación / devolución *</label>
             <input value={reason} placeholder="Ej. Cobro erróneo, devolución del cliente..." onChange={e => setReason(e.target.value)} autoFocus /></div>
+          {requirePin && (
+            <div className="field"><label>PIN de gerente *</label>
+              <input type="password" inputMode="numeric" value={mgrPin} placeholder="Autorización de un gerente" onChange={e => setMgrPin(e.target.value.replace(/\D/g, ''))} />
+              <span className="muted" style={{ fontSize: '.74rem' }}>Un administrador debe autorizar esta cancelación con su PIN.</span>
+            </div>
+          )}
           <p className="muted" style={{ fontSize: '.74rem', marginTop: -4 }}>El producto regresará al stock y quedará registrado en Auditoría.</p>
         </div>
       )}
       <div className="modal-actions no-print">
-        {isAdmin && !voided && !voiding && <button className="btn ghost" style={{ color: 'var(--bad)', marginRight: 'auto' }} onClick={() => setVoiding(true)}>Cancelar venta</button>}
+        {(isAdmin || requirePin) && !voided && !voiding && <button className="btn ghost" style={{ color: 'var(--bad)', marginRight: 'auto' }} onClick={() => setVoiding(true)}>Cancelar venta</button>}
         {voiding && !voided && <button className="btn ghost" onClick={() => setVoiding(false)}>Atrás</button>}
         {voiding && !voided && <button className="btn" style={{ background: 'var(--bad)', borderColor: 'var(--bad)' }} disabled={busy} onClick={doVoid}>{busy ? 'Cancelando…' : 'Confirmar cancelación'}</button>}
         {!voiding && <button className="btn ghost" onClick={onClose}>Cerrar</button>}

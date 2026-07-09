@@ -38,10 +38,12 @@ cp .env.example .env         # ajusta credenciales si hace falta
 npm install
 npx prisma migrate dev --name init   # crea las tablas
 npm run seed                 # carga datos de ejemplo (staff, servicios, clientes...)
-npm run dev                  # API en http://localhost:4000
+npm run dev                  # API en http://localhost:4001
 ```
 
-Claves de acceso de ejemplo (PIN): **Admin 1111**, empleadas 2222 / 3333 / 4444.
+Acceso al sistema (correo + contraseña): **admin@seren.com / admin123**
+(empleadas: karla@seren.com / karla123, lucia@seren.com / lucia123, daniela@seren.com / daniela123).
+El PIN (1111, 2222, …) es **solo para identificar a la cajera en el Punto de venta**, no para entrar al sistema.
 
 ### 3. Frontend
 

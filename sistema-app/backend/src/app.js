@@ -28,6 +28,8 @@ import importRoutes from './routes/import.js';
 import tablesRoutes from './routes/tables.js';
 import kitchenRoutes from './routes/kitchen.js';
 import ventasRoutes from './routes/ventas.js';
+import companyRoutes from './routes/companies.js';
+import projectRoutes from './routes/projects.js';
 import waWebhookRoutes from './routes/waWebhook.js';
 import { notFound, errorHandler } from './lib/http.js';
 import { rateLimit, securityHeaders, sanitizeBody } from './middleware/security.js';
@@ -84,6 +86,8 @@ export function createApp() {
   app.use('/api/staff', staffRoutes);
   app.use('/api/staff', staffDocRoutes);
   app.use('/api/crm', crmRoutes);
+  app.use('/api/companies', companyRoutes);
+  app.use('/api/projects', projectRoutes);
   app.use('/api/expenses', expenseRoutes);
   app.use('/api/promotions', promotionRoutes);
   app.use('/api/whatsapp', whatsappRoutes);

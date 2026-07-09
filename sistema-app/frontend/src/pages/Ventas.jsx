@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import { Modal, toast, money, matches } from '../ui.jsx';
-import { businessName, setting } from '../permissions.js';
+import { businessName, businessLogo, businessInfo, setting } from '../permissions.js';
 import Select from '../components/Select.jsx';
 import Tabs from '../components/Tabs.jsx';
 import DateField from '../components/DateField.jsx';
@@ -15,6 +15,13 @@ const STATUS = {
   vencida:    { label: 'Vencida',    cls: 'bg-warn' },
   convertida: { label: 'Convertida', cls: 'bg-ok' },
 };
+
+const Ic = ({ d, s = 16 }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>{d}</svg>
+);
+const monogram = name => (name || '·').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+const StatusChip = ({ s }) => <span className={'q-chip q-' + s}><i />{STATUS[s]?.label || s}</span>;
 
 export default function Ventas() {
   const { user } = useAuth();
@@ -44,49 +51,58 @@ function Quotes({ admin }) {
   const [view, setView] = useState(null);     // cotización a ver/imprimir
   const [convert, setConvert] = useState(null);
 
+  const [q, setQ] = useState('');
   const load = () => api.get('/ventas/quotes' + (filter ? '?status=' + filter : '')).then(setQuotes).catch(e => toast(e.message, 'bad'));
   useEffect(() => { load(); }, [filter]); // eslint-disable-line
 
-  const totalAbierto = quotes.filter(q => ['borrador', 'enviada'].includes(q.status)).reduce((a, q) => a + q.total, 0);
-  const ganadas = quotes.filter(q => q.status === 'aceptada' || q.status === 'convertida').length;
+  const totalAbierto = quotes.filter(x => ['borrador', 'enviada'].includes(x.status)).reduce((a, x) => a + x.total, 0);
+  const ganadas = quotes.filter(x => x.status === 'aceptada' || x.status === 'convertida').length;
+  const shown = quotes.filter(x => !q.trim() || matches(String(x.folio), q) || matches(x.client?.name || x.clientName || '', q));
 
   return (
     <>
-      <div className="stat-row mb">
-        <div className="stat"><div className="lbl">Cotizaciones</div><div className="val">{quotes.length}</div></div>
-        <div className="stat"><div className="lbl">Valor en curso</div><div className="val">{money(totalAbierto)}</div><div className="chg">borradores + enviadas</div></div>
-        <div className="stat"><div className="lbl">Aceptadas</div><div className="val">{ganadas}</div></div>
-        <div className="stat"><div className="lbl">Conversión</div><div className="val">{quotes.length ? Math.round(ganadas / quotes.length * 100) : 0}%</div></div>
+      <div className="inv-kpis">
+        <div className="inv-kpi"><span className="inv-kpi-ic plum"><Ic s={18} d={<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8M8 17h6" /></>} /></span><div><b>{quotes.length}</b><span>Cotizaciones</span></div></div>
+        <div className="inv-kpi"><span className="inv-kpi-ic gold"><Ic s={18} d={<><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></>} /></span><div><b>{money(totalAbierto)}</b><span>Valor en curso</span></div></div>
+        <div className="inv-kpi"><span className="inv-kpi-ic plum"><Ic s={18} d={<><path d="M22 11.1V12a10 10 0 1 1-5.9-9.1" /><path d="M22 4 12 14 9 11" /></>} /></span><div><b>{ganadas}</b><span>Aceptadas</span></div></div>
+        <div className="inv-kpi"><span className="inv-kpi-ic gold"><Ic s={18} d={<><path d="M3 3v18h18" /><path d="M7 14l3-3 3 3 5-5" /></>} /></span><div><b>{quotes.length ? Math.round(ganadas / quotes.length * 100) : 0}%</b><span>Conversión</span></div></div>
       </div>
 
-      <div className="row mb" style={{ justifyContent: 'space-between' }}>
-        <div style={{ width: 200 }}>
+      <div className="inv-toolbar">
+        <div className="inv-search">
+          <Ic s={16} d={<><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></>} />
+          <input placeholder="Buscar por folio o cliente…" value={q} onChange={e => setQ(e.target.value)} />
+          {q && <button className="inv-search-x" onClick={() => setQ('')} title="Limpiar"><Ic s={14} d={<><path d="M18 6 6 18M6 6l12 12" /></>} /></button>}
+        </div>
+        <div style={{ width: 190 }}>
           <Select value={filter} onChange={setFilter} placeholder="Todos los estados"
             options={[{ value: '', label: 'Todos los estados' }, ...Object.entries(STATUS).map(([k, v]) => ({ value: k, label: v.label }))]} />
         </div>
-        <button className="btn" onClick={() => setEdit({ items: [], discount: '', taxRate: '', shipping: '', shippingFree: false, clientId: '', clientName: '', notes: '', validUntil: '' })}>Nueva cotización</button>
+        <button className="btn" onClick={() => setEdit({ items: [], discount: '', taxRate: setting('ivaDefault', 0) || '', shipping: '', shippingFree: false, priceListId: '', clientId: '', clientName: '', notes: '', validUntil: '' })}>
+          <Ic s={15} d={<><path d="M12 5v14M5 12h14" /></>} /> Nueva cotización
+        </button>
       </div>
 
-      <div className="card" style={{ padding: 0 }}>
-        <table>
+      <div className="card scroll-x" style={{ padding: 0 }}>
+        <table className="inv-tbl">
           <thead><tr><th>Folio</th><th>Cliente</th><th className="col-sm-hide">Fecha</th><th>Estado</th><th className="right">Total</th><th></th></tr></thead>
           <tbody>
-            {quotes.map(q => (
-              <tr key={q.id}>
-                <td>#{q.folio}</td>
-                <td>{q.client?.name || q.clientName || 'Sin cliente'}</td>
-                <td className="col-sm-hide muted">{new Date(q.createdAt).toLocaleDateString('es-MX')}</td>
-                <td><span className={'badge ' + (STATUS[q.status]?.cls || '')}>{STATUS[q.status]?.label || q.status}</span></td>
-                <td className="right">{money(q.total)}</td>
+            {shown.map((x, i) => (
+              <tr key={x.id} className="inv-row" style={{ '--i': Math.min(i, 12), cursor: 'pointer' }} onClick={() => setView(x)}>
+                <td><span className="pur-folio">#{x.folio}</span></td>
+                <td>{x.client?.name || x.clientName || <span className="muted">Sin cliente</span>}</td>
+                <td className="col-sm-hide muted">{new Date(x.createdAt).toLocaleDateString('es-MX')}</td>
+                <td><StatusChip s={x.status} /></td>
+                <td className="right"><b className="inv-price">{money(x.total)}</b></td>
                 <td className="right">
-                  <div className="row-actions">
-                    <button className="btn ghost sm" onClick={() => setView(q)}>Ver</button>
-                    {q.status !== 'convertida' && <button className="btn ghost sm" onClick={() => openEdit(q, setEdit)}>Editar</button>}
+                  <div className="row-actions inv-acts">
+                    <button className="icon-btn" title="Ver" onClick={e => { e.stopPropagation(); setView(x); }}><Ic s={15} d={<><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>} /></button>
+                    {x.status !== 'convertida' && <button className="icon-btn" title="Editar" onClick={e => { e.stopPropagation(); openEdit(x, setEdit); }}><Ic s={15} d={<><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>} /></button>}
                   </div>
                 </td>
               </tr>
             ))}
-            {!quotes.length && <tr><td colSpan="6" className="empty">Sin cotizaciones aún</td></tr>}
+            {!shown.length && <tr><td colSpan="6" className="empty">{q ? 'Sin coincidencias' : 'Sin cotizaciones aún'}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -116,6 +132,8 @@ function QuoteEditor({ draft, onClose, onSaved }) {
   const [products, setProducts] = useState([]);
   const [services, setServices] = useState([]);
   const [clients, setClients] = useState([]);
+  const [priceLists, setPriceLists] = useState([]);
+  const [priceListId, setPriceListId] = useState(draft.priceListId || '');
   const [picker, setPicker] = useState('producto');
   const [pickId, setPickId] = useState('');
 
@@ -123,7 +141,35 @@ function QuoteEditor({ draft, onClose, onSaved }) {
     api.get('/inventory/products').then(setProducts).catch(() => {});
     api.get('/catalog/services').then(setServices).catch(() => {});
     api.get('/ventas/clients').then(setClients).catch(() => {});
+    api.get('/ventas/price-lists').then(setPriceLists).catch(() => {});
   }, []);
+
+  // Lista de precios activa: los PRODUCTOS toman su precio especial si están en la lista.
+  // Si el producto no está en la lista, o no hay lista, usa el precio de catálogo.
+  const selectedList = priceLists.find(l => l.id === priceListId);
+  const listPrice = (productId, fallback) => {
+    if (selectedList) {
+      const it = selectedList.items.find(i => i.productId === productId);
+      if (it) return it.price;
+    }
+    return fallback || 0;
+  };
+
+  // Al cambiar de lista, recalcula el precio de los productos ya agregados (servicios no cambian).
+  function changeList(id) {
+    setPriceListId(id);
+    const list = priceLists.find(l => l.id === id);
+    setForm(f => ({
+      ...f,
+      priceListId: id || null,
+      items: f.items.map(it => {
+        if (it.type !== 'producto') return it;
+        const li = list?.items.find(i => i.productId === it.refId);
+        const prod = products.find(p => p.id === it.refId);
+        return { ...it, price: li ? li.price : (prod?.price || 0) };
+      }),
+    }));
+  }
 
   const lineSub = it => ((Number(it.price) || 0) * (Number(it.qty) || 0)) * (1 - (Number(it.discount) || 0) / 100);
   const subtotal = form.items.reduce((a, it) => a + lineSub(it), 0);
@@ -141,7 +187,9 @@ function QuoteEditor({ draft, onClose, onSaved }) {
     const cat = picker === 'producto' ? products : services;
     const found = cat.find(x => x.id === pickId);
     if (!found) return toast('Elige un ítem', 'bad');
-    setForm(f => ({ ...f, items: [...f.items, { type: picker, refId: found.id, name: found.name, qty: 1, price: found.price || 0, discount: 0 }] }));
+    // Productos: precio de la lista seleccionada (o catálogo). Servicios: precio de catálogo.
+    const price = picker === 'producto' ? listPrice(found.id, found.price) : (found.price || 0);
+    setForm(f => ({ ...f, items: [...f.items, { type: picker, refId: found.id, name: found.name, qty: 1, price, discount: 0 }] }));
     setPickId('');
   }
   const setItem = (idx, patch) => setForm(f => ({ ...f, items: f.items.map((it, i) => i === idx ? { ...it, ...patch } : it) }));
@@ -167,13 +215,25 @@ function QuoteEditor({ draft, onClose, onSaved }) {
         {!form.clientId && <div className="field"><label>Nombre del prospecto</label><input value={form.clientName} onChange={e => setForm({ ...form, clientName: e.target.value })} placeholder="Ej. Distribuidora del Norte" /></div>}
       </div>
 
+      {/* Lista de precios: los productos toman el precio de la lista elegida */}
+      {priceLists.length > 0 && (
+        <div className="field">
+          <label>Lista de precios</label>
+          <Select value={priceListId} onChange={changeList} placeholder="Precios de catálogo"
+            options={[{ value: '', label: 'Precios de catálogo (normal)' }, ...priceLists.map(l => ({ value: l.id, label: l.name + (l.isDefault ? ' · predeterminada' : '') }))]} />
+          <span className="muted" style={{ fontSize: '.78rem' }}>
+            {selectedList ? 'Los productos usan el precio de esta lista. Los servicios mantienen su precio normal.' : 'Elige una lista (ej. Mayoreo) para aplicar precios especiales a los productos.'}
+          </span>
+        </div>
+      )}
+
       {/* Agregar ítems */}
       <div className="field"><label>Agregar productos / servicios</label>
         <div className="row" style={{ gap: 8 }}>
           <Select style={{ width: 120 }} value={picker} onChange={v => { setPicker(v); setPickId(''); }} options={[{ value: 'producto', label: 'Producto' }, { value: 'servicio', label: 'Servicio' }]} />
           <div style={{ flex: 1 }}>
             <Select searchable value={pickId} onChange={setPickId} placeholder="Buscar producto/servicio..."
-              options={(picker === 'producto' ? products : services).map(x => ({ value: x.id, label: `${x.name} · ${money(x.price)}` }))} />
+              options={(picker === 'producto' ? products : services).map(x => ({ value: x.id, label: `${x.name} · ${money(picker === 'producto' ? listPrice(x.id, x.price) : x.price)}` }))} />
           </div>
           <button className="btn ghost" type="button" onClick={addItem}>Agregar</button>
         </div>
@@ -296,29 +356,64 @@ function QuoteView({ quote, onClose, onChanged, onConvert }) {
 
   return (
     <Modal title={`Cotización #${q.folio}`} onClose={onClose} width={680}>
-      <div id="ticket-print">
-        <div style={{ textAlign: 'center', marginBottom: 12 }}>
-          <div className="serif" style={{ fontSize: '1.6rem', letterSpacing: '.1em', fontWeight: 600 }}>{businessName()}</div>
-          <div className="muted" style={{ fontSize: 12 }}>Cotización #{q.folio} · {new Date(q.createdAt).toLocaleDateString('es-MX')}</div>
+      <div id="ticket-print" className="quote-doc">
+        <div className="qd-head">
+          <div className="qd-brand">
+            {businessLogo() && <img className="qd-logo" src={businessLogo()} alt="Logo" />}
+            <div className="qd-biz-info">
+              <div className="qd-biz">{businessName()}</div>
+              {(() => { const b = businessInfo(); return (
+                <div className="qd-biz-meta">
+                  {b.address && <div>{b.address}</div>}
+                  {(b.phone || b.email) && <div>{[b.phone && `Tel. ${b.phone}`, b.email].filter(Boolean).join(' · ')}</div>}
+                  {b.rfc && <div>RFC {b.rfc}</div>}
+                </div>
+              ); })()}
+            </div>
+          </div>
+          <div className="qd-title">
+            <div className="qd-title-lbl">Cotización</div>
+            <div className="qd-folio">#{q.folio}</div>
+            <div className="qd-date">{new Date(q.createdAt).toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' })}</div>
+          </div>
         </div>
-        <div className="tot"><span>Cliente</span><span>{q.client?.name || q.clientName || 'Sin cliente'}</span></div>
-        {q.validUntil && <div className="tot"><span>Válida hasta</span><span>{new Date(q.validUntil).toLocaleDateString('es-MX')}</span></div>}
-        <hr style={{ border: 'none', borderTop: '1px dashed #ccc', margin: '10px 0' }} />
-        <table style={{ width: '100%', fontSize: 13 }}>
-          <thead><tr><th>Concepto</th><th>Cant</th><th className="right">Importe</th></tr></thead>
+
+        <div className="qd-meta">
+          <div className="qd-meta-box">
+            <span>Cliente</span>
+            <b>{q.client?.name || q.clientName || 'Sin cliente'}</b>
+            {q.client?.phone && <small>{q.client.phone}</small>}
+          </div>
+          <div className="qd-meta-box right">
+            {q.validUntil && <><span>Válida hasta</span><b>{new Date(q.validUntil).toLocaleDateString('es-MX')}</b></>}
+            <small className="qd-status">{STATUS[q.status]?.label || q.status}</small>
+          </div>
+        </div>
+
+        <table className="qd-table">
+          <thead><tr><th>Concepto</th><th className="c">Cant.</th><th className="r">P. unit</th><th className="r">Importe</th></tr></thead>
           <tbody>
             {(q.items || []).map(it => (
-              <tr key={it.id}><td>{it.name}{it.discount > 0 ? ` (−${it.discount}%)` : ''}</td><td>{it.qty}</td><td className="right">{money(lineSub(it))}</td></tr>
+              <tr key={it.id}>
+                <td>{it.name}{it.discount > 0 ? <span className="qd-disc"> −{it.discount}%</span> : ''}</td>
+                <td className="c">{it.qty}</td>
+                <td className="r">{money(it.price)}</td>
+                <td className="r">{money(lineSub(it))}</td>
+              </tr>
             ))}
           </tbody>
         </table>
-        <hr style={{ border: 'none', borderTop: '1px dashed #ccc', margin: '10px 0' }} />
-        <div className="tot"><span>Subtotal</span><span>{money(q.subtotal)}</span></div>
-        {q.discount > 0 && <div className="tot"><span>Descuento</span><span>−{money(q.discount)}</span></div>}
-        {q.taxRate > 0 && <div className="tot"><span>IVA ({q.taxRate}%)</span><span>{money(q.tax)}</span></div>}
-        {(q.shipping > 0 || q.shippingFree) && <div className="tot"><span>Envío</span><span>{q.shippingFree ? 'Gratis' : money(q.shipping)}</span></div>}
-        <div className="tot grand"><span>TOTAL</span><span>{money(q.total)}</span></div>
-        {q.notes && <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>{q.notes}</p>}
+
+        <div className="qd-totals">
+          <div className="qd-tot"><span>Subtotal</span><span>{money(q.subtotal)}</span></div>
+          {q.discount > 0 && <div className="qd-tot"><span>Descuento</span><span>−{money(q.discount)}</span></div>}
+          {q.taxRate > 0 && <div className="qd-tot"><span>IVA ({q.taxRate}%)</span><span>{money(q.tax)}</span></div>}
+          {(q.shipping > 0 || q.shippingFree) && <div className="qd-tot"><span>Envío</span><span>{q.shippingFree ? 'Gratis' : money(q.shipping)}</span></div>}
+          <div className="qd-tot qd-grand"><span>Total</span><span>{money(q.total)}</span></div>
+        </div>
+
+        {q.notes && <div className="qd-notes"><b>Notas</b><p>{q.notes}</p></div>}
+        <div className="qd-foot">Gracias por su preferencia — {businessName()}</div>
       </div>
 
       <div className="row no-print" style={{ gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
@@ -405,22 +500,25 @@ function Portfolio({ admin }) {
 
   return (
     <>
-      <div className="row mb" style={{ justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-        <span className="muted">{admin ? 'Asigna clientes a cada vendedor. Cada vendedor solo ve su cartera.' : 'Tu cartera de clientes asignada.'}</span>
-        <div className="row" style={{ gap: 8 }}>
-          {admin && <button className="btn ghost" onClick={openDistribute}>Repartir al azar</button>}
-          <input style={{ width: 220 }} placeholder="Buscar cliente..." value={q} onChange={e => setQ(e.target.value)} />
+      <div className="inv-toolbar">
+        <div className="inv-search">
+          <Ic s={16} d={<><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></>} />
+          <input placeholder="Buscar cliente…" value={q} onChange={e => setQ(e.target.value)} />
+          {q && <button className="inv-search-x" onClick={() => setQ('')} title="Limpiar"><Ic s={14} d={<><path d="M18 6 6 18M6 6l12 12" /></>} /></button>}
         </div>
+        <span className="inv-count" style={{ marginRight: 'auto' }}>{clients.length} cliente{clients.length !== 1 ? 's' : ''}</span>
+        {admin && <button className="btn ghost" onClick={openDistribute}><Ic s={15} d={<><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5" /></>} /> Repartir al azar</button>}
       </div>
-      <div className="card" style={{ padding: 0 }}>
-        <table>
+      <p className="muted mb" style={{ fontSize: '.82rem', marginTop: -8 }}>{admin ? 'Asigna clientes a cada vendedor. Cada vendedor solo ve su cartera.' : 'Tu cartera de clientes asignada.'}</p>
+      <div className="card scroll-x" style={{ padding: 0 }}>
+        <table className="inv-tbl">
           <thead><tr><th>Cliente</th><th className="col-sm-hide">Teléfono</th><th>{admin ? 'Vendedor asignado' : 'Etiqueta'}</th></tr></thead>
           <tbody>
-            {clients.map(c => (
-              <tr key={c.id}>
-                <td>{c.name}</td>
+            {clients.map((c, i) => (
+              <tr key={c.id} className="inv-row" style={{ '--i': Math.min(i, 12) }}>
+                <td><div className="pur-sup"><span className="pur-sup-mono">{monogram(c.name)}</span>{c.name}</div></td>
                 <td className="col-sm-hide muted">{c.phone || '—'}</td>
-                <td style={{ width: admin ? 220 : 'auto' }}>
+                <td style={{ width: admin ? 230 : 'auto' }}>
                   {admin
                     ? <Select value={c.sellerId || ''} onChange={v => assign(c.id, v)} placeholder="Sin asignar"
                         options={[{ value: '', label: 'Sin asignar' }, ...sellers.map(s => ({ value: s.id, label: s.name }))]} />
@@ -502,21 +600,29 @@ function PriceLists() {
   return (
     <>
       <div className="row mb" style={{ gap: 8 }}>
-        <input style={{ flex: 1, maxWidth: 280 }} placeholder="Nueva lista (Mayoreo, Distribuidor...)" value={newName} onChange={e => setNewName(e.target.value)} />
-        <button className="btn" onClick={create}>Crear lista</button>
+        <input style={{ flex: 1, maxWidth: 320 }} placeholder="Nueva lista (Mayoreo, Distribuidor…)" value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === 'Enter' && create()} />
+        <button className="btn" onClick={create}><Ic s={15} d={<><path d="M12 5v14M5 12h14" /></>} /> Crear lista</button>
       </div>
-      <div className="grid g3 mb">
-        {lists.map(l => (
-          <div key={l.id} className="card">
-            <h3 style={{ fontWeight: 500 }}>{l.name}{l.isDefault ? ' · base' : ''}</h3>
-            <p className="muted" style={{ fontSize: '.8rem' }}>{l.items.length} producto(s) con precio especial</p>
-            <div className="row-actions" style={{ justifyContent: 'flex-start', marginTop: 8 }}>
-              <button className="btn ghost sm" onClick={() => setEditId(l.id)}>Gestionar</button>
-              {!l.isDefault && <button className="btn ghost sm" style={{ color: 'var(--bad)' }} onClick={() => setDelList(l)}>Eliminar</button>}
+      <div className="pl-list-grid">
+        {lists.map((l, i) => (
+          <div key={l.id} className="pl-card" style={{ '--i': i }}>
+            <div className="pl-card-top">
+              <span className="pl-card-ic"><Ic s={19} d={<><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /><rect x="9" y="3" width="6" height="4" rx="1" /><path d="M9 12h6M9 16h4" /></>} /></span>
+              {l.isDefault && <span className="pl-card-tag">Base</span>}
+            </div>
+            <div className="pl-card-name">{l.name}</div>
+            <div className="pl-card-count">{l.items.length} producto{l.items.length !== 1 ? 's' : ''} con precio especial</div>
+            <div className="pl-card-foot">
+              <button className="btn ghost sm" onClick={() => setEditId(l.id)}><Ic s={14} d={<><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>} /> Gestionar</button>
+              {!l.isDefault && <button className="icon-btn danger" title="Eliminar" onClick={() => setDelList(l)}><Ic s={15} d={<><path d="M3 6h18" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></>} /></button>}
             </div>
           </div>
         ))}
-        {!lists.length && <div className="card empty" style={{ gridColumn: '1/-1' }}>Sin listas. Crea una (ej. Mayoreo) para precios especiales.</div>}
+        {!lists.length && <div className="empty-cal" style={{ gridColumn: '1/-1' }}>
+          <Ic s={28} d={<><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /><rect x="9" y="3" width="6" height="4" rx="1" /></>} />
+          <p>Sin listas de precios</p>
+          <span className="muted">Crea una (ej. Mayoreo) para aplicar precios especiales.</span>
+        </div>}
       </div>
 
       {editList && (

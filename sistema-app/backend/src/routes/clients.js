@@ -43,26 +43,107 @@ r.get('/count', async (req, res) => {
   res.json({ total: await prisma.client.count() });
 });
 
-// Detalle con expediente
+// Verificación en vivo desde el formulario: ¿este teléfono ya existe?
+// IMPORTANTE: debe ir ANTES de '/:id' para que Express no lo tome como un id.
+r.get('/check-phone', async (req, res) => {
+  const dup = await findDupPhone(req.query.phone, req.query.excludeId || null);
+  res.json({ duplicate: !!dup, client: dup || null });
+});
+
+// Exportar TODOS los clientes (respaldo / migración). Va antes de '/:id'.
+r.get('/export', requirePerm('crm'), async (_req, res) => {
+  const clients = await prisma.client.findMany({
+    orderBy: { name: 'asc' },
+    include: { company: { select: { name: true } } },
+  });
+  res.json(clients.map(c => ({
+    name: c.name, phone: c.phone || '', email: c.email || '',
+    birth: c.birth ? c.birth.toISOString().slice(0, 10) : '',
+    tag: c.tag || '', source: c.source || '',
+    empresa: c.company?.name || '', note: c.note || '',
+  })));
+});
+
+// Importar clientes desde filas [{name, phone, email, birth, tag, source, empresa, note}].
+// Dedupe por teléfono: si el teléfono ya existe, ACTUALIZA; si no, CREA. Liga/crea empresa por nombre.
+r.post('/import', requirePerm('crm'), async (req, res) => {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  let created = 0, updated = 0, skipped = 0; const errors = [];
+  const companies = await prisma.company.findMany({ select: { id: true, name: true } });
+  const compByName = new Map(companies.map(c => [c.name.trim().toLowerCase(), c.id]));
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] || {};
+    const name = (row.name || '').toString().trim();
+    if (!name) { skipped++; continue; }
+    try {
+      const phone = (row.phone || '').toString().trim();
+      let companyId = null;
+      const cn = (row.empresa || '').toString().trim();
+      if (cn) {
+        companyId = compByName.get(cn.toLowerCase());
+        if (!companyId) { const nc = await prisma.company.create({ data: { name: cn } }); companyId = nc.id; compByName.set(cn.toLowerCase(), nc.id); }
+      }
+      const b = row.birth ? new Date(row.birth) : null;
+      const data = {
+        name, phone: phone || null, email: (row.email || '').toString().trim() || null,
+        tag: (row.tag || '').toString().trim() || 'Nueva', source: (row.source || '').toString().trim() || null,
+        note: (row.note || '').toString().trim() || null, companyId,
+        birth: b && !isNaN(b) ? b : null,
+      };
+      const dup = phone ? await findDupPhone(phone, null) : null;
+      if (dup) { await prisma.client.update({ where: { id: dup.id }, data }); updated++; }
+      else { await prisma.client.create({ data: { ...data, record: { create: {} } } }); created++; }
+    } catch (e) { errors.push(`Fila ${i + 1} (${name}): ${e.message}`); }
+  }
+  res.json({ created, updated, skipped, errors, total: rows.length });
+});
+
+// ¿El usuario puede ver el expediente clínico (datos sensibles)?
+const canExpediente = u => u?.role === 'admin' || u?.role === 'superadmin' || (u?.perms || []).includes('expediente');
+
+// Detalle. El expediente clínico (record + notas) SOLO se incluye si el usuario tiene permiso.
 r.get('/:id', async (req, res) => {
+  const exp = canExpediente(req.user);
   const client = await prisma.client.findUnique({
     where: { id: req.params.id },
-    include: { record: { include: { notes: true } }, packages: true, _count: { select: { sales: true } } },
+    include: exp
+      ? { record: { include: { notes: true } }, packages: true, _count: { select: { sales: true } } }
+      : { packages: true, _count: { select: { sales: true } } },
   });
   if (!client) return res.status(404).json({ error: 'No encontrado' });
   res.json(client);
 });
 
+// Busca un cliente con el mismo teléfono (comparando SOLO dígitos, ignora espacios/guiones).
+// Devuelve {id, name} del cliente existente, o null. excludeId omite al propio cliente (al editar).
+async function findDupPhone(phone, excludeId) {
+  const digits = (phone || '').replace(/\D/g, '');
+  if (!digits) return null;
+  const rows = await prisma.$queryRaw`
+    SELECT id, name FROM "Client"
+    WHERE regexp_replace(coalesce(phone,''), '[^0-9]', '', 'g') = ${digits}`;
+  const found = rows.find(r => r.id !== excludeId);
+  return found || null;
+}
+
 // Crear
 r.post('/', async (req, res) => {
-  const { name, phone, email, birth, tag, skin, allergies, source, note } = req.body;
+  const { name, phone, email, birth, tag, skin, allergies, source, note, force, companyId } = req.body;
   if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
+  // Teléfono único: si ya existe y no se forzó, rechaza avisando con quién choca.
+  if (phone && !force) {
+    const dup = await findDupPhone(phone, null);
+    if (dup) return res.status(409).json({ error: `Ese teléfono ya está registrado con ${dup.name}.`, duplicate: true, client: dup });
+  }
+  // Los datos clínicos (alergias) solo los puede escribir quien tenga permiso de expediente.
+  const canExp = canExpediente(req.user);
   const client = await prisma.client.create({
     data: {
       name, phone, email, tag: tag || 'Nueva', skin: skin || null, note: note || null, source: source || null,
+      companyId: companyId || null,
       birth: birth ? new Date(birth) : null,
       // El expediente clínico se crea vacío; los datos clínicos se capturan en el módulo Expediente
-      record: { create: { allergies: allergies || null } },
+      record: { create: { allergies: canExp ? (allergies || null) : null } },
     },
     include: { record: true },
   });
@@ -71,14 +152,21 @@ r.post('/', async (req, res) => {
 
 // Actualizar
 r.put('/:id', async (req, res) => {
-  const { name, phone, email, birth, tag, skin, allergies, source, note, tagManual } = req.body;
+  const { name, phone, email, birth, tag, skin, allergies, source, note, tagManual, force, companyId } = req.body;
+  // Teléfono único (excluye al propio cliente que se edita)
+  if (phone && !force) {
+    const dup = await findDupPhone(phone, req.params.id);
+    if (dup) return res.status(409).json({ error: `Ese teléfono ya está registrado con ${dup.name}.`, duplicate: true, client: dup });
+  }
   const data = { name, phone, email, source, birth: birth ? new Date(birth) : undefined };
+  if (companyId !== undefined) data.companyId = companyId || null;
   if (skin !== undefined) data.skin = skin;
   if (note !== undefined) data.note = note;
   // La etiqueta solo la cambia un admin (manual). Marca tagManual para que el auto no la sobreescriba.
   if (tag !== undefined && req.user.role === 'admin') { data.tag = tag; data.tagManual = tagManual !== false; }
   const client = await prisma.client.update({ where: { id: req.params.id }, data });
-  if (allergies !== undefined) {
+  // Alergias: dato clínico → solo si el usuario tiene permiso de expediente.
+  if (allergies !== undefined && canExpediente(req.user)) {
     let record = await prisma.clinicalRecord.findUnique({ where: { clientId: req.params.id } });
     if (!record) await prisma.clinicalRecord.create({ data: { clientId: req.params.id, allergies } });
     else await prisma.clinicalRecord.update({ where: { id: record.id }, data: { allergies } });

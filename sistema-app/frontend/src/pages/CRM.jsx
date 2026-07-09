@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Fragment } from 'react';
 import { api } from '../api.js';
 import { Modal, toast, initials } from '../ui.jsx';
 import DateField from '../components/DateField.jsx';
 import Client360 from '../components/Client360.jsx';
 import DealsBoard from '../components/DealsBoard.jsx';
+import ProjectsBoard from '../components/ProjectsBoard.jsx';
+import CardScanner from '../components/CardScanner.jsx';
+import ImportExport from '../components/ImportExport.jsx';
 import Tabs from '../components/Tabs.jsx';
 import Select from '../components/Select.jsx';
 import { isModuleEnabled, businessName, setting } from '../permissions.js';
@@ -41,28 +44,37 @@ export default function CRM() {
   // Estos dos los activa/desactiva el super-admin desde el panel del sistema
   const campanasOn = setting('usarCampanas');
   const automatizacionesOn = setting('usarAutomatizaciones');
+  // Visibilidad de pestañas del CRM configurada por el admin (Ajustes). Por defecto: visibles.
+  const crmTabs = setting('crmTabs', {}) || {};
+  const tabOn = k => crmTabs[k] !== false;
   const tabs = [
     ['buscar', 'Clientes'],
-    ...(isModuleEnabled('tratos') ? [['tratos', 'Embudo']] : []),
+    ...(tabOn('empresas') ? [['empresas', 'Empresas']] : []),
+    ...(isModuleEnabled('tratos') && tabOn('tratos') ? [['tratos', 'Embudo']] : []),
     ...(isModuleEnabled('tratos') && isAdmin ? [['equipo', 'Equipo']] : []),
-    ...(campanasOn ? [['campanas', 'Campañas']] : []),
-    ...(automatizacionesOn ? [['automatizaciones', 'Automatización']] : []),
-    ['riesgo', 'En riesgo'], ['cumple', 'Cumpleaños'], ['seguimientos', 'Seguimientos'], ['origen', 'Origen'],
+    ...(tabOn('proyectos') ? [['proyectos', 'Proyectos']] : []),
+    ...(campanasOn && tabOn('campanas') ? [['campanas', 'Campañas']] : []),
+    ...(automatizacionesOn && tabOn('automatizaciones') ? [['automatizaciones', 'Automatización']] : []),
+    ...(tabOn('cumple') ? [['cumple', 'Cumpleaños']] : []),
+    ...(tabOn('seguimientos') ? [['seguimientos', 'Seguimientos']] : []),
+    ...(tabOn('origen') ? [['origen', 'Origen']] : []),
   ];
   // Si la pestaña activa quedó deshabilitada, vuelve a "Clientes"
   useEffect(() => {
-    if ((tab === 'campanas' && !campanasOn) || (tab === 'automatizaciones' && !automatizacionesOn)) setTab('buscar');
-  }, [tab, campanasOn, automatizacionesOn]);
+    // Si la pestaña activa ya no está visible (la ocultó el admin), vuelve a Clientes
+    if (!tabs.some(t => t[0] === tab)) setTab('buscar');
+  }, [tab, tabs]); // eslint-disable-line
   return (
     <>
       <div className="top"><div><h1>CRM</h1><div className="sub">Retención y relación con clientes</div></div></div>
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
       {tab === 'buscar' && <ClientSearch onOpen={setView360} />}
+      {tab === 'empresas' && <Companies onOpen={setView360} />}
+      {tab === 'proyectos' && <ProjectsBoard />}
       {tab === 'tratos' && <DealsBoard />}
       {tab === 'equipo' && isAdmin && <SellersBoard />}
       {tab === 'campanas' && campanasOn && <Campaigns />}
       {tab === 'automatizaciones' && automatizacionesOn && <Automations />}
-      {tab === 'riesgo' && <AtRisk onOpen={setView360} />}
       {tab === 'cumple' && <Birthdays />}
       {tab === 'seguimientos' && <FollowUps />}
       {tab === 'origen' && <Sources />}
@@ -75,18 +87,84 @@ export default function CRM() {
 function ClientSearch({ onOpen }) {
   const [q, setQ] = useState('');
   const [filtered, setFiltered] = useState([]);
+  const [newForm, setNewForm] = useState(null);   // alta de contacto/cliente
+  const [phoneDup, setPhoneDup] = useState(null);  // cliente existente con el mismo teléfono
+  const [saving, setSaving] = useState(false);
+  const [companies, setCompanies] = useState([]);
+  useEffect(() => { api.get('/companies').then(setCompanies).catch(() => {}); }, []);
+  const reload = () => api.get('/clients?take=50' + (q.trim() ? '&q=' + encodeURIComponent(q.trim()) : '')).then(setFiltered).catch(() => {});
   useEffect(() => {
-    const t = setTimeout(() => {
-      api.get('/clients?take=50' + (q.trim() ? '&q=' + encodeURIComponent(q.trim()) : '')).then(setFiltered).catch(() => {});
-    }, 250); // debounce: espera a que el usuario deje de teclear
+    const t = setTimeout(reload, 250); // debounce: espera a que el usuario deje de teclear
     return () => clearTimeout(t);
   }, [q]);
+
+  // Alerta en vivo: ¿el teléfono ya está registrado con otro cliente?
+  useEffect(() => {
+    const ph = newForm?.phone || '';
+    if (ph.replace(/\D/g, '').length < 7) { setPhoneDup(null); return; }
+    const t = setTimeout(() => {
+      api.get('/clients/check-phone?phone=' + encodeURIComponent(ph) + (newForm?.id ? '&excludeId=' + newForm.id : ''))
+        .then(r => setPhoneDup(r.duplicate ? r.client : null)).catch(() => {});
+    }, 400);
+    return () => clearTimeout(t);
+  }, [newForm?.phone]);
+
+  // Abre el formulario para EDITAR un cliente existente (trae sus datos completos)
+  async function editClient(c) {
+    try {
+      const full = await api.get('/clients/' + c.id);
+      setNewForm({ id: full.id, name: full.name || '', phone: full.phone || '', email: full.email || '', tag: full.tag || 'Nueva', source: full.source || '', companyId: full.companyId || '' });
+      setPhoneDup(null);
+    } catch { toast('No se pudo abrir el cliente', 'bad'); }
+  }
+
+  // Aplica los datos leídos de una tarjeta al formulario (rellena lo vacío / detectado)
+  function applyScan(d) {
+    setNewForm(f => {
+      let companyId = f.companyId;
+      if (d.company) {
+        const b = d.company.toLowerCase();
+        const m = companies.find(c => { const a = c.name.toLowerCase(); return a.includes(b) || b.includes(a); });
+        if (m) companyId = m.id;
+      }
+      return { ...f, name: d.name || f.name, phone: d.phone || f.phone, email: d.email || f.email, companyId };
+    });
+  }
+
+  async function saveNew() {
+    if (!newForm.name?.trim()) return toast('El nombre es obligatorio', 'bad');
+    setSaving(true);
+    try {
+      if (newForm.id) {
+        await api.put('/clients/' + newForm.id, { ...newForm, force: !!phoneDup });
+        toast('Cliente actualizado', 'ok');
+      } else {
+        await api.post('/clients', { ...newForm, force: !!phoneDup }); // force: guardar aunque el tel. exista
+        toast('Contacto creado', 'ok');
+      }
+      setNewForm(null); setPhoneDup(null); reload();
+    } catch (e) { toast(e.message, 'bad'); }
+    finally { setSaving(false); }
+  }
+
   return (
     <>
       {/* Embudo del ciclo de vida (antes era la pestaña "Flujo", ahora integrado aquí) */}
       <Pipeline onOpen={onOpen} />
 
-      <div className="sec-title">Directorio de clientes</div>
+      <div className="row mb" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div className="sec-title" style={{ margin: 0 }}>Directorio de clientes</div>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <ImportExport exportUrl="/clients/export" importUrl="/clients/import" filename="clientes" label="clientes"
+            columns={[
+              { key: 'name', label: 'Nombre' }, { key: 'phone', label: 'Teléfono' },
+              { key: 'email', label: 'Correo' }, { key: 'birth', label: 'Cumpleaños' },
+              { key: 'tag', label: 'Etiqueta' }, { key: 'source', label: 'Origen' },
+              { key: 'empresa', label: 'Empresa' }, { key: 'note', label: 'Nota' },
+            ]} onDone={reload} />
+          <button className="btn" onClick={() => { setNewForm({ name: '', phone: '', email: '', tag: 'Nueva', source: '', companyId: '' }); setPhoneDup(null); }}>＋ Nuevo contacto o cliente</button>
+        </div>
+      </div>
       <div className="row mb" style={{ justifyContent: 'space-between' }}>
         <span className="muted">Busca un cliente y abre su ficha completa (Vista 360)</span>
         <input style={{ width: 280 }} placeholder="Buscar por nombre o teléfono..." value={q} onChange={e => setQ(e.target.value)} />
@@ -100,13 +178,155 @@ function ClientSearch({ onOpen }) {
                 <td><div className="client-cell"><span className="client-avatar">{initials(c.name)}</span>{c.name}</div></td>
                 <td><span className={tagBadge(c.tag)}>{c.tag}</span></td>
                 <td className="muted">{c.phone || '—'}</td>
-                <td><span className="link">Ver ficha 360 →</span></td>
+                <td className="right"><div className="row-actions">
+                  <button className="btn ghost sm" onClick={e => { e.stopPropagation(); editClient(c); }}>Editar</button>
+                  <span className="link" onClick={e => { e.stopPropagation(); onOpen(c.id); }}>Ver 360 →</span>
+                </div></td>
               </tr>
             ))}
             {!filtered.length && <tr><td colSpan="4" className="empty">Sin resultados</td></tr>}
           </tbody>
         </table>
       </div>
+
+      {newForm && (
+        <Modal title={newForm.id ? 'Editar cliente' : 'Nuevo contacto o cliente'} onClose={() => setNewForm(null)}>
+          {!newForm.id && (
+            <div className="card mb" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, background: 'var(--cream)', padding: '10px 12px' }}>
+              <span className="muted" style={{ fontSize: '.82rem' }}>¿Tienes su tarjeta? Tómale foto y detecto los datos.</span>
+              <CardScanner onData={applyScan} />
+            </div>
+          )}
+          <div className="field"><label>Nombre *</label><input value={newForm.name} onChange={e => setNewForm({ ...newForm, name: e.target.value })} placeholder="Nombre completo" autoFocus /></div>
+          <div className="row2">
+            <div className="field"><label>Teléfono</label><input type="tel" inputMode="numeric" value={newForm.phone} onChange={e => setNewForm({ ...newForm, phone: e.target.value.replace(/[^\d+]/g, '') })} placeholder="10 dígitos" /></div>
+            <div className="field"><label>Email</label><input value={newForm.email} onChange={e => setNewForm({ ...newForm, email: e.target.value })} placeholder="correo@ejemplo.com" /></div>
+          </div>
+          {phoneDup && (
+            <div className="card" style={{ background: 'rgba(201,138,75,.12)', border: '1px solid #C98A4B', padding: '10px 12px', marginBottom: 12 }}>
+              <b style={{ color: '#B4771F' }}>⚠ Teléfono ya registrado</b>
+              <div className="muted" style={{ fontSize: '.84rem', marginTop: 2 }}>Este número ya está en el sistema con <b>{phoneDup.name}</b>. Puedes guardar de todos modos si de verdad es otro contacto.</div>
+            </div>
+          )}
+          <div className="row2">
+            <div className="field"><label>Origen</label>
+              <Select value={newForm.source || ''} onChange={v => setNewForm({ ...newForm, source: v })} placeholder="Sin registrar"
+                options={[{ value: '', label: 'Sin registrar' }, 'Instagram', 'Facebook', 'TikTok', 'Recomendación', 'Google', 'Pasó por el local', 'Otro']} />
+            </div>
+            <div className="field"><label>Etiqueta</label><input value={newForm.tag} onChange={e => setNewForm({ ...newForm, tag: e.target.value })} placeholder="Nueva" /></div>
+          </div>
+          {companies.length > 0 && (
+            <div className="field"><label>Empresa (opcional)</label>
+              <Select value={newForm.companyId} onChange={v => setNewForm({ ...newForm, companyId: v })} placeholder="Sin empresa"
+                options={[{ value: '', label: 'Sin empresa' }, ...companies.map(c => ({ value: c.id, label: c.name }))]} />
+            </div>
+          )}
+          <div className="modal-actions">
+            <button className="btn ghost" onClick={() => setNewForm(null)}>Cancelar</button>
+            <button className="btn" disabled={saving} onClick={saveNew}>{phoneDup ? 'Guardar de todos modos' : 'Crear contacto'}</button>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+// Empresas cliente (CRM B2B): administrar empresas y ver sus contactos ligados
+function Companies({ onOpen }) {
+  const [list, setList] = useState([]);
+  const [q, setQ] = useState('');
+  const [form, setForm] = useState(null);     // crear/editar empresa
+  const [detail, setDetail] = useState(null);  // empresa expandida con sus clientes
+  const reload = () => api.get('/companies' + (q.trim() ? '?q=' + encodeURIComponent(q.trim()) : '')).then(setList).catch(() => {});
+  useEffect(() => { const t = setTimeout(reload, 250); return () => clearTimeout(t); }, [q]);
+
+  async function save() {
+    if (!form.name?.trim()) return toast('El nombre es obligatorio', 'bad');
+    try {
+      if (form.id) await api.put('/companies/' + form.id, form);
+      else await api.post('/companies', form);
+      toast('Empresa guardada', 'ok'); setForm(null); reload();
+    } catch (e) { toast(e.message, 'bad'); }
+  }
+  async function remove(c) {
+    if (!confirm('¿Eliminar la empresa ' + c.name + '? Sus contactos quedarán sin empresa (no se borran).')) return;
+    try { await api.del('/companies/' + c.id); reload(); toast('Empresa eliminada', 'ok'); } catch (e) { toast(e.message, 'bad'); }
+  }
+  async function openDetail(c) {
+    if (detail?.id === c.id) { setDetail(null); return; }
+    try { setDetail(await api.get('/companies/' + c.id)); } catch { toast('No se pudo abrir', 'bad'); }
+  }
+
+  return (
+    <>
+      <div className="row mb" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <input style={{ width: 280 }} placeholder="Buscar empresa..." value={q} onChange={e => setQ(e.target.value)} />
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <ImportExport exportUrl="/companies/export" importUrl="/companies/import" filename="empresas" label="empresas"
+            columns={[
+              { key: 'name', label: 'Nombre' }, { key: 'rfc', label: 'RFC' },
+              { key: 'phone', label: 'Teléfono' }, { key: 'email', label: 'Correo' },
+              { key: 'address', label: 'Dirección' }, { key: 'notes', label: 'Notas' },
+            ]} onDone={reload} />
+          <button className="btn" onClick={() => setForm({ name: '', rfc: '', phone: '', email: '', address: '', notes: '' })}>＋ Nueva empresa</button>
+        </div>
+      </div>
+      <div className="card" style={{ padding: 0 }}>
+        <table>
+          <thead><tr><th>Empresa</th><th>Contactos</th><th>Teléfono</th><th></th></tr></thead>
+          <tbody>
+            {list.map(c => (
+              <Fragment key={c.id}>
+                <tr style={{ cursor: 'pointer' }} onClick={() => openDetail(c)}>
+                  <td><b>{c.name}</b>{c.rfc && <span className="muted" style={{ fontSize: '.78rem' }}> · {c.rfc}</span>}</td>
+                  <td>{c._count?.clients || 0}</td>
+                  <td className="muted">{c.phone || '—'}</td>
+                  <td className="right"><div className="row-actions">
+                    <button className="btn ghost sm" onClick={e => { e.stopPropagation(); setForm(c); }}>Editar</button>
+                    <button className="btn ghost sm" style={{ color: 'var(--bad)' }} onClick={e => { e.stopPropagation(); remove(c); }}>Eliminar</button>
+                  </div></td>
+                </tr>
+                {detail?.id === c.id && (
+                  <tr><td colSpan="4" style={{ background: 'var(--cream)' }}>
+                    <div style={{ padding: '4px 2px' }}>
+                      <b style={{ fontSize: '.85rem' }}>Contactos de {c.name}</b>
+                      {detail.clients.length ? detail.clients.map(cl => (
+                        <div key={cl.id} className="row" style={{ justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
+                          <span>{cl.name} <span className="muted" style={{ fontSize: '.78rem' }}>{cl.phone || ''}</span></span>
+                          <span className="link" onClick={() => onOpen(cl.id)}>Ver ficha →</span>
+                        </div>
+                      )) : <div className="muted" style={{ fontSize: '.82rem', padding: '6px 0' }}>Sin contactos ligados aún. Asigna esta empresa a un cliente desde su ficha.</div>}
+                    </div>
+                  </td></tr>
+                )}
+              </Fragment>
+            ))}
+            {!list.length && <tr><td colSpan="4" className="empty">Sin empresas</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {form && (
+        <Modal title={form.id ? 'Editar empresa' : 'Nueva empresa'} onClose={() => setForm(null)}>
+          {!form.id && (
+            <div className="card mb" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, background: 'var(--cream)', padding: '10px 12px' }}>
+              <span className="muted" style={{ fontSize: '.82rem' }}>¿Tienes su tarjeta? Tómale foto y detecto los datos.</span>
+              <CardScanner onData={d => setForm(f => ({ ...f, name: d.company || d.name || f.name, phone: d.phone || f.phone, email: d.email || f.email }))} />
+            </div>
+          )}
+          <div className="field"><label>Nombre *</label><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} autoFocus placeholder="Razón social o nombre comercial" /></div>
+          <div className="row2">
+            <div className="field"><label>RFC</label><input value={form.rfc || ''} onChange={e => setForm({ ...form, rfc: e.target.value })} /></div>
+            <div className="field"><label>Teléfono</label><input type="tel" inputMode="numeric" value={form.phone || ''} onChange={e => setForm({ ...form, phone: e.target.value.replace(/[^\d+]/g, '') })} /></div>
+          </div>
+          <div className="row2">
+            <div className="field"><label>Email</label><input value={form.email || ''} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
+            <div className="field"><label>Dirección</label><input value={form.address || ''} onChange={e => setForm({ ...form, address: e.target.value })} /></div>
+          </div>
+          <div className="field"><label>Notas</label><textarea rows="2" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
+          <div className="modal-actions"><button className="btn ghost" onClick={() => setForm(null)}>Cancelar</button><button className="btn" onClick={save}>Guardar</button></div>
+        </Modal>
+      )}
     </>
   );
 }
@@ -229,7 +449,7 @@ function SellersBoard() {
   useEffect(() => { api.get('/deals/sellers-board').then(setRows).catch(e => toast(e.message, 'bad')); }, []);
 
   if (!rows) return <p className="muted">Cargando…</p>;
-  if (!rows.length) return <div className="card"><div className="empty">Aún no hay tratos asignados a vendedores.</div></div>;
+  if (!rows.length) return <div className="card"><div className="empty">Aún no hay oportunidades asignadas a vendedores.</div></div>;
 
   const fmt = n => '$' + (Number(n) || 0).toLocaleString('es-MX');
   return (

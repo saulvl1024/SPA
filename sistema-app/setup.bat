@@ -45,6 +45,6 @@ cd ..
 echo.
 echo ============================================
 echo   Listo! Ahora abre start.bat para usar el sistema.
-echo   Claves: Admin 1111 - Empleadas 2222 / 3333 / 4444
+echo   Acceso: admin@seren.com / admin123  (el PIN 1111 es solo para el POS)
 echo ============================================
 pause

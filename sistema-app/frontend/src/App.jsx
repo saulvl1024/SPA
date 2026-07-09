@@ -7,6 +7,7 @@ import Login from './pages/Login.jsx';
 import PublicMenu from './pages/PublicMenu.jsx';
 import Layout from './components/Layout.jsx';
 import SystemConfig from './pages/SystemConfig.jsx';
+import Settings from './pages/Settings.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Clients from './pages/Clients.jsx';
 import CRM from './pages/CRM.jsx';
@@ -85,6 +86,7 @@ export default function App() {
           <Route key={r.path} path={r.path} element={r.el} />
         ))}
         {user.role === 'superadmin' && <Route path={SYSTEM_ROUTE.path} element={SYSTEM_ROUTE.el} />}
+        {(user.role === 'admin' || user.role === 'superadmin') && <Route path="/ajustes" element={<Settings />} />}
         <Route path="*" element={<Navigate to={home} />} />
       </Routes>
     </Layout>

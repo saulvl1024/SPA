@@ -10,7 +10,9 @@ const pad = n => String(n).padStart(2, '0');
 const toStr = d => d ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : '';
 const fromStr = s => {
   if (!s) return undefined;
-  const [y, m, d] = s.split('-').map(Number);
+  // Acepta 'YYYY-MM-DD' o ISO completo ('YYYY-MM-DDTHH:mm:ss.sssZ') tomando solo la fecha.
+  const [y, m, d] = String(s).slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return undefined; // nunca devolver Date inválido (rompería el calendario)
   return new Date(y, m - 1, d);
 };
 const label = s => {

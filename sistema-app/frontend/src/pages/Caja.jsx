@@ -1,12 +1,25 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useAuth } from '../auth.jsx';
-import { Modal, toast, money, downloadExcel } from '../ui.jsx';
+import { Modal, toast, money, downloadStyledExcel } from '../ui.jsx';
 import DateField from '../components/DateField.jsx';
 import { businessName } from '../permissions.js';
 
 const localISO = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const today = () => localISO(new Date());
+const shiftDay = (dateStr, delta) => { const d = new Date((dateStr || today()) + 'T00:00:00'); d.setDate(d.getDate() + delta); return localISO(d); };
+const monogram = name => (name || '·').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+const Ic = ({ d, s = 16 }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>{d}</svg>
+);
+// Icono del método de pago dominante
+const METHOD_PATH = {
+  efectivo: <><rect x="2" y="6" width="20" height="12" rx="2" /><circle cx="12" cy="12" r="2.5" /><path d="M6 12h.01M18 12h.01" /></>,
+  tarjeta: <><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M2 10h20" /></>,
+  transferencia: <><path d="M4 8h13M13 4l4 4-4 4" /><path d="M20 16H7M11 20l-4-4 4-4" /></>,
+};
+const domMethod = s => s.payments?.length ? s.payments[0].method : s.paymentMethod;
 function byMethod(sales) {
   const m = { efectivo: 0, tarjeta: 0, transferencia: 0 };
   sales.forEach(s => {
@@ -103,8 +116,10 @@ function AdminCaja() {
     } catch (e) { toast(e.message, 'bad'); }
   }
 
-  const m = byMethod(sales);
-  const total = sales.reduce((a, s) => a + s.total, 0);
+  // Las ventas canceladas NO cuentan en los totales del día ni en el desglose por método.
+  const validSales = sales.filter(s => !s.voided);
+  const m = byMethod(validSales);
+  const total = validSales.reduce((a, s) => a + s.total, 0);
   const totalSalidas = salidas.reduce((a, e) => a + e.amount, 0);
   const nameOf = id => staff.find(s => s.id === id)?.name?.split(' ')[0] || '—';
   const itemsLabel = s => (s.items || []).map(i => `${i.name}${i.qty > 1 ? ' x' + i.qty : ''}`).join(', ');
@@ -124,75 +139,119 @@ function AdminCaja() {
     // Hoja 3: salidas de efectivo del día
     const outs = [['Hora', 'Motivo', 'Monto', 'Registró']];
     salidas.forEach(e => outs.push([new Date(e.date).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }), e.note || '', e.amount, nameOf(e.staffId)]));
-    downloadExcel('ventas_' + date, [{ name: 'Ventas', rows: ventas }, { name: 'Detalle por artículo', rows: detalle }, { name: 'Salidas de efectivo', rows: outs }]);
+    downloadStyledExcel('ventas_' + date, [{ name: 'Ventas', rows: ventas }, { name: 'Detalle por artículo', rows: detalle }, { name: 'Salidas de efectivo', rows: outs }]);
   }
   function exportCuts() {
     const rows = [['Fecha y hora', 'Cajera', 'Fondo', 'Efectivo', 'Tarjeta', 'Transferencia', 'Total ventas', 'Tickets', 'Salidas de efectivo', 'Efectivo esperado', 'Contado', 'Diferencia']];
     cuts.forEach(c => rows.push([new Date(c.date).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }), c.userName, c.fondo, c.byMethod.efectivo, c.byMethod.tarjeta, c.byMethod.transferencia, c.total, c.tickets, c.cashOut || 0, c.esperadoEfectivo, c.countedCash, c.diff]));
-    downloadExcel('cortes_caja', [{ name: 'Cortes', rows }]);
+    downloadStyledExcel('cortes_caja', [{ name: 'Cortes', rows }]);
   }
+
+  const isToday = date === today();
+  const dLabel = new Date(date + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
 
   return (
     <>
-      <div className="sec-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-        <span>Administrador · corte e historial</span>
-        <div className="row">
-          <button className="btn ghost sm" onClick={() => setDate(today())}>Hoy</button>
-          <button className="btn ghost sm" onClick={() => setDate(yesterday())}>Ayer</button>
-          <DateField style={{ width: 160 }} value={date} onChange={setDate} />
-          <button className="btn ghost sm" onClick={refresh}>⟳ Actualizar</button>
-          <button className="btn ghost sm" onClick={exportSales}>⬇ Ventas</button>
-          <button className="btn ghost sm" onClick={exportCuts}>⬇ Cortes</button>
+      <div className="caja-bar">
+        <div className="caja-day">
+          <div className="day-nav">
+            <button className="day-nav-btn" aria-label="Día anterior" onClick={() => setDate(shiftDay(date, -1))}><Ic s={16} d={<path d="M15 18l-6-6 6-6" />} /></button>
+            <button className={'day-nav-today' + (isToday ? ' on' : '')} onClick={() => setDate(today())}>Hoy</button>
+            <button className="day-nav-btn" aria-label="Día siguiente" onClick={() => setDate(shiftDay(date, 1))}><Ic s={16} d={<path d="M9 18l6-6-6-6" />} /></button>
+          </div>
+          <DateField style={{ width: 158 }} value={date} onChange={setDate} />
+          <span className="caja-daylabel">{dLabel}</span>
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn ghost sm" onClick={refresh}><Ic s={14} d={<><path d="M21 12a9 9 0 1 1-3-6.7L21 8" /><path d="M21 3v5h-5" /></>} /> Actualizar</button>
+          <button className="btn ghost sm" onClick={exportSales}><Ic s={14} d={<><path d="M12 3v12M7 10l5 5 5-5" /><path d="M4 21h16" /></>} /> Ventas</button>
+          <button className="btn ghost sm" onClick={exportCuts}><Ic s={14} d={<><path d="M12 3v12M7 10l5 5 5-5" /><path d="M4 21h16" /></>} /> Cortes</button>
         </div>
       </div>
-      <div className="grid g4 mb">
-        <div className="card kpi"><div className="lbl">Efectivo</div><div className="val">{money(m.efectivo)}</div></div>
-        <div className="card kpi"><div className="lbl">Tarjeta + transf.</div><div className="val">{money(m.tarjeta + m.transferencia)}</div></div>
-        <div className="card kpi"><div className="lbl">Salidas de efectivo</div><div className="val" style={{ color: totalSalidas ? 'var(--bad)' : 'inherit' }}>{money(totalSalidas)}</div></div>
-        <div className="card kpi"><div className="lbl">Total ventas {date}</div><div className="val">{money(total)}</div></div>
+
+      <div className="inv-kpis">
+        <div className="inv-kpi">
+          <span className="inv-kpi-ic gold"><Ic s={18} d={METHOD_PATH.efectivo} /></span>
+          <div><b>{money(m.efectivo)}</b><span>Efectivo</span></div>
+        </div>
+        <div className="inv-kpi">
+          <span className="inv-kpi-ic plum"><Ic s={18} d={METHOD_PATH.tarjeta} /></span>
+          <div><b>{money(m.tarjeta + m.transferencia)}</b><span>Tarjeta + transferencia</span></div>
+        </div>
+        <div className={'inv-kpi' + (totalSalidas ? ' bad' : '')}>
+          <span className="inv-kpi-ic bad"><Ic s={18} d={<><path d="M12 5v14M5 12l7 7 7-7" /></>} /></span>
+          <div><b style={totalSalidas ? { color: 'var(--bad)' } : undefined}>{money(totalSalidas)}</b><span>Salidas de efectivo</span></div>
+        </div>
+        <div className="inv-kpi">
+          <span className="inv-kpi-ic gold"><Ic s={18} d={<><path d="M3 3v18h18" /><path d="M7 14l3-3 3 3 5-5" /></>} /></span>
+          <div><b>{money(total)}</b><span>Total ventas · {validSales.length} ticket{validSales.length !== 1 ? 's' : ''}</span></div>
+        </div>
       </div>
 
       {openSessions.length > 0 && (
-        <>
-          <div className="sec-title" style={{ color: 'var(--bad)' }}>⚠ Cajas abiertas (sin cortar)</div>
-          <div className="card scroll-x" style={{ padding: 0 }}>
-            <table><thead><tr><th>Cajera</th><th>Abierta desde</th><th>Fondo</th><th>Efectivo esperado</th><th>Total ventas</th><th></th></tr></thead><tbody>
-              {openSessions.map(s => (
-                <tr key={s.id}>
-                  <td><b>{s.userName}</b></td>
+        <div className="caja-warn">
+          <div className="caja-warn-head">
+            <Ic s={18} d={<><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4M12 17h.01" /></>} />
+            <b>Cajas abiertas sin cortar</b>
+          </div>
+          <div className="card scroll-x" style={{ padding: 0, marginTop: 10 }}>
+            <table className="inv-tbl"><thead><tr><th>Cajera</th><th>Abierta desde</th><th className="right">Fondo</th><th className="right">Efectivo esperado</th><th className="right">Total ventas</th><th></th></tr></thead><tbody>
+              {openSessions.map((s, i) => (
+                <tr key={s.id} className="inv-row" style={{ '--i': i }}>
+                  <td><div className="pur-sup"><span className="pur-sup-mono">{monogram(s.userName)}</span><b>{s.userName}</b></div></td>
                   <td className="td-date">{new Date(s.openedAt).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}</td>
-                  <td>{money(s.fondo)}</td>
-                  <td>{money(s.esperadoEfectivo)}</td>
-                  <td>{money(s.total)}</td>
-                  <td><button className="btn ghost sm" onClick={() => setClosing({ ...s, counted: Math.round(s.esperadoEfectivo) })}>Forzar corte</button></td>
+                  <td className="right">{money(s.fondo)}</td>
+                  <td className="right">{money(s.esperadoEfectivo)}</td>
+                  <td className="right"><b>{money(s.total)}</b></td>
+                  <td className="right"><button className="btn ghost sm" onClick={() => setClosing({ ...s, counted: Math.round(s.esperadoEfectivo) })}>Forzar corte</button></td>
                 </tr>
               ))}
             </tbody></table>
           </div>
-        </>
+        </div>
       )}
 
       <div className="sec-title">Ventas del día</div>
       <div className="card scroll-x" style={{ padding: 0 }}>
-        <table><thead><tr><th>Ticket</th><th>Cliente</th><th>Cajera</th><th>Método</th><th>Total</th><th></th></tr></thead><tbody>
-          {sales.map(s => <tr key={s.id}><td>#{s.ticketNo}</td><td>{s.client?.name}</td><td>{nameOf(s.cashierId)}</td><td><span className="badge">{saleMethodLabel(s)}</span></td><td>{money(s.total)}</td>
-            <td><button className="btn ghost sm" title="Reimprimir ticket" onClick={() => printTicket(s, nameOf(s.cashierId))}>🖨</button></td></tr>)}
-          {!sales.length && <tr><td colSpan="6" className="empty">Sin ventas</td></tr>}
+        <table className="inv-tbl"><thead><tr><th>Ticket</th><th>Cliente</th><th>Cajera</th><th>Método</th><th className="right">Total</th><th></th></tr></thead><tbody>
+          {sales.map((s, i) => (
+            <tr key={s.id} className={'inv-row' + (s.voided ? ' caja-voided' : '')} style={{ '--i': i }}>
+              <td><span className="caja-ticket">#{s.ticketNo}</span>{s.voided && <span className="caja-void-tag">Cancelada</span>}</td>
+              <td>{s.client?.name || <span className="muted">Mostrador</span>}</td>
+              <td><div className="pur-sup"><span className="pur-sup-mono sm">{monogram(nameOf(s.cashierId))}</span><span className="muted">{nameOf(s.cashierId)}</span></div></td>
+              <td><span className="pay-chip"><Ic s={13} d={METHOD_PATH[domMethod(s)] || METHOD_PATH.efectivo} /> {saleMethodLabel(s)}</span></td>
+              <td className="right"><b className="inv-price">{money(s.total)}</b></td>
+              <td className="right"><button className="icon-btn" title="Reimprimir ticket" onClick={() => printTicket(s, nameOf(s.cashierId))}><Ic s={15} d={<><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v8H6z" /></>} /></button></td>
+            </tr>
+          ))}
+          {!sales.length && <tr><td colSpan="6" className="empty">Sin ventas este día</td></tr>}
         </tbody></table>
       </div>
 
       <div className="sec-title">Salidas de efectivo del día</div>
       <div className="card scroll-x" style={{ padding: 0 }}>
-        <table><thead><tr><th>Hora</th><th>Motivo</th><th>Registró</th><th>Monto</th></tr></thead><tbody>
-          {salidas.map(e => <tr key={e.id}><td className="td-date">{new Date(e.date).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}</td><td>{e.note || '—'}</td><td>{nameOf(e.staffId)}</td><td style={{ color: 'var(--bad)' }}>−{money(e.amount)}</td></tr>)}
+        <table className="inv-tbl"><thead><tr><th>Hora</th><th>Motivo</th><th>Registró</th><th className="right">Monto</th></tr></thead><tbody>
+          {salidas.map((e, i) => <tr key={e.id} className="inv-row" style={{ '--i': i }}><td className="td-date">{new Date(e.date).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}</td><td>{e.note || '—'}</td><td className="muted">{nameOf(e.staffId)}</td><td className="right"><b style={{ color: 'var(--bad)' }}>−{money(e.amount)}</b></td></tr>)}
           {!salidas.length && <tr><td colSpan="4" className="empty">Sin salidas de efectivo</td></tr>}
         </tbody></table>
       </div>
 
       <div className="sec-title">Cortes guardados</div>
       <div className="card scroll-x" style={{ padding: 0 }}>
-        <table><thead><tr><th>Fecha / hora</th><th>Cajera</th><th>Total ventas</th><th>Salidas</th><th>Contado</th><th>Diferencia</th></tr></thead><tbody>
-          {cuts.map(c => <tr key={c.id}><td className="td-date">{new Date(c.date).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}</td><td>{c.userName}</td><td>{money(c.total)}</td><td>{c.cashOut ? '−' + money(c.cashOut) : '—'}</td><td>{money(c.countedCash)}</td><td>{money(c.diff)}</td></tr>)}
+        <table className="inv-tbl"><thead><tr><th>Fecha / hora</th><th>Cajera</th><th className="right">Total ventas</th><th className="right">Salidas</th><th className="right">Contado</th><th className="right">Diferencia</th></tr></thead><tbody>
+          {cuts.map((c, i) => {
+            const diff = c.diff || 0;
+            return (
+              <tr key={c.id} className="inv-row" style={{ '--i': i }}>
+                <td className="td-date">{new Date(c.date).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                <td><div className="pur-sup"><span className="pur-sup-mono sm">{monogram(c.userName)}</span><span className="muted">{c.userName}</span></div></td>
+                <td className="right">{money(c.total)}</td>
+                <td className="right muted">{c.cashOut ? '−' + money(c.cashOut) : '—'}</td>
+                <td className="right">{money(c.countedCash)}</td>
+                <td className="right"><span className={'caja-diff ' + (Math.round(diff) === 0 ? 'ok' : diff < 0 ? 'bad' : 'warn')}>{diff > 0 ? '+' : ''}{money(diff)}</span></td>
+              </tr>
+            );
+          })}
           {!cuts.length && <tr><td colSpan="6" className="empty">Aún no hay cortes</td></tr>}
         </tbody></table>
       </div>

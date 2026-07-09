@@ -21,7 +21,7 @@ async function metrics(start, end) {
   const expenses = await prisma.expense.findMany({ where: { date: { gte: start, lte: end } } });
   const purchases = await prisma.purchase.findMany({ where: { date: { gte: start, lte: end } }, select: { total: true } });
 
-  const ingresos = sales.reduce((a, s) => a + s.total, 0);
+  const ingresos = sales.reduce((a, s) => a + (s.total - (s.tip || 0)), 0); // la propina no es ingreso del negocio
   const gastos = expenses.reduce((a, e) => a + e.amount, 0);
   // Total invertido en inventario en el periodo (INFORMATIVO: no afecta la utilidad, eso va por costo de ventas)
   const comprasTotal = purchases.reduce((a, p) => a + (p.total || 0), 0);

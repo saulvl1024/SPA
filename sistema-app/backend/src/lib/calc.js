@@ -74,17 +74,25 @@ export function promoDiscount(promo, subtotal) {
 }
 
 /**
- * Busca una cita en conflicto: mismo horario de inicio, ignorando canceladas/no asistió.
- * @param {Array} appointments - [{start, status}]
- * @param {Date|string} when - inicio propuesto
+ * Busca una cita en conflicto por SOLAPAMIENTO de rangos [inicio, fin), ignorando
+ * canceladas/no asistió. Dos rangos se traslapan si: nuevoInicio < finExistente Y nuevoFin > inicioExistente.
+ * @param {Array} appointments - [{start, end?, status}]
+ * @param {Date|string} start - inicio propuesto
+ * @param {Date|string} [end]  - fin propuesto (si falta, asume 60 min)
+ * @param {string} [excludeId] - id de cita a ignorar (al reagendar la misma)
  * @returns la cita en conflicto o null
  */
-export function findClash(appointments = [], when) {
-  const t = new Date(when).getTime();
-  return appointments.find(a =>
-    new Date(a.start).getTime() === t &&
-    !['cancelada', 'no_asistio'].includes(a.status)
-  ) || null;
+export function findClash(appointments = [], start, end, excludeId = null) {
+  const DEFAULT_MIN = 60;
+  const s = new Date(start).getTime();
+  const e = end != null ? new Date(end).getTime() : s + DEFAULT_MIN * 60000;
+  return appointments.find(a => {
+    if (excludeId && a.id === excludeId) return false;
+    if (['cancelada', 'no_asistio'].includes(a.status)) return false;
+    const as = new Date(a.start).getTime();
+    const ae = a.end != null ? new Date(a.end).getTime() : as + DEFAULT_MIN * 60000;
+    return s < ae && e > as; // se traslapan
+  }) || null;
 }
 
 /** Nivel de lealtad según puntos. */

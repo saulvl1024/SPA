@@ -1,12 +1,30 @@
 import { useEffect, useState, useRef } from 'react';
 import { api } from '../api.js';
 import { useAuth } from '../auth.jsx';
-import { Modal, toast, money, downloadExcel } from '../ui.jsx';
+import { Modal, toast, money, downloadStyledExcel } from '../ui.jsx';
 import { setting } from '../permissions.js';
 import ImportModal from '../components/ImportModal.jsx';
 import Select from '../components/Select.jsx';
 
-const label = x => x.stock <= x.minStock / 2 ? ['Crítico', 'bg-bad'] : x.stock <= x.minStock ? ['Bajo', 'bg-warn'] : ['Óptimo', 'bg-ok'];
+// Umbral: el mínimo propio del producto, o el global de Ajustes (stockAlert) si no tiene uno
+const minOf = x => x.minStock > 0 ? x.minStock : (Number(setting('stockAlert', 5)) || 0);
+const label = x => {
+  const min = minOf(x);
+  if (min <= 0) return ['Óptimo', 'bg-ok'];
+  return x.stock <= min / 2 ? ['Crítico', 'bg-bad'] : x.stock <= min ? ['Bajo', 'bg-warn'] : ['Óptimo', 'bg-ok'];
+};
+// Medidor de salud de stock (0–100) respecto al doble del mínimo
+const barPct = x => {
+  const min = minOf(x);
+  if (min <= 0) return x.stock > 0 ? 100 : 0;
+  return Math.max(5, Math.min(100, Math.round((x.stock / (min * 2)) * 100)));
+};
+const STATUS_COLOR = { 'bg-ok': 'var(--ok)', 'bg-warn': 'var(--warn)', 'bg-bad': 'var(--bad)' };
+
+const Ic = ({ d, s = 16 }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>{d}</svg>
+);
 
 // Redimensiona una imagen a máx 400px y la comprime a JPEG base64 (para no inflar la BD)
 function compressImage(file, maxSize = 400, quality = 0.78) {
@@ -108,6 +126,24 @@ export default function Inventory() {
   const [whSel, setWhSel] = useState(() => (user.role !== 'admin' && user.warehouseId) ? user.warehouseId : '');
   const [whLevels, setWhLevels] = useState({});  // { productId: qty } del almacén seleccionado
   const usaAlmacenes = setting('usarAlmacenes', false);
+  const [q, setQ] = useState('');            // buscador
+  const [cat, setCat] = useState('');        // filtro por categoría
+  const [onlyLow, setOnlyLow] = useState(false); // solo stock bajo/crítico
+
+  // Categorías presentes en productos (para el filtro)
+  const cats = [...new Set(products.map(p => (p.category || '').trim()).filter(Boolean))].sort();
+  const isLow = x => { const [l] = label(x); return l === 'Bajo' || l === 'Crítico'; };
+  const matchQ = x => {
+    const t = q.trim().toLowerCase();
+    if (!t) return true;
+    return (x.name || '').toLowerCase().includes(t) || (x.barcode || '').toLowerCase().includes(t) || (x.category || '').toLowerCase().includes(t);
+  };
+  const shownProducts = products.filter(p => matchQ(p) && (!cat || (p.category || '') === cat) && (!onlyLow || isLow(p)));
+
+  // KPIs del inventario (sobre TODOS los productos, no el filtro)
+  const invValue = products.reduce((a, p) => a + (Number(p.price) || 0) * (Number(p.stock) || 0), 0);
+  const lowCount = products.filter(isLow).length;
+  const outCount = products.filter(p => (Number(p.stock) || 0) <= 0).length;
 
   const load = () => { api.get('/inventory/supplies').then(setSupplies); api.get('/inventory/products').then(setProducts); };
   useEffect(() => { load(); if (admin) api.get('/catalog/services').then(setServices); }, []); // eslint-disable-line
@@ -202,29 +238,58 @@ export default function Inventory() {
     catch (e) { toast(e.message, 'bad'); }
   }
 
-  const Rows = ({ list, kind }) => list.map(x => {
+  const Rows = ({ list, kind }) => list.map((x, i) => {
     const [lbl, cls] = label(x);
+    const color = STATUS_COLOR[cls];
     return (
-      <tr key={x.id}>
-        <td>{x.name}
-          {x.isBundle && <span className="badge" style={{ background: 'var(--gold)', color: '#fff', marginLeft: 6, fontSize: '.66rem' }}>paquete</span>}
-          {x.variants?.length > 0 && <span className="badge" style={{ background: 'var(--plum)', color: '#fff', marginLeft: 6, fontSize: '.66rem' }}>{x.variants.length} variantes</span>}
-        </td>{kind === 'supplies' ? <td>{x.category || '—'}</td> : <td>{money(x.price)}</td>}
+      <tr key={x.id} className="inv-row" style={{ '--i': i }}>
+        <td>
+          <div className="inv-name">
+            {kind === 'products' && (
+              <span className="inv-thumb">
+                {x.image ? <img src={x.image} alt="" /> : <Ic s={18} d={<><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" /><path d="M3 8l9 5 9-5" /><path d="M12 13v9" /></>} />}
+              </span>
+            )}
+            <div className="inv-name-txt">
+              <span className="inv-name-l">
+                {x.name}
+                {x.isBundle && <span className="inv-tag gold">paquete</span>}
+                {x.variants?.length > 0 && <span className="inv-tag plum">{x.variants.length} variantes</span>}
+              </span>
+              {(x.category || x.barcode) && <span className="inv-cat">{x.category || ''}{x.category && x.barcode ? ' · ' : ''}{x.barcode ? '#' + x.barcode : ''}</span>}
+            </div>
+          </div>
+        </td>
+        {kind === 'supplies' ? <td className="muted">{x.category || '—'}</td> : <td className="inv-price">{money(x.price)}</td>}
         <td>
           {whSel && kind === 'products'
             ? <input type="number" min="0" placeholder="0" defaultValue={whLevels[x.id] || ''} key={whSel + x.id} style={{ width: 80, padding: '5px 8px' }}
                 onBlur={e => (Number(e.target.value) || 0) !== (whLevels[x.id] || 0) && setWhQty(x.id, e.target.value)} />
-            : <>{x.stock}{x.unit ? ' ' + x.unit : ''}</>}
-        </td><td>{x.minStock}</td>
-        <td><span className={'badge ' + cls}>{lbl}</span></td>
+            : <div className="inv-stock">
+                <span className="inv-stock-n">{x.stock}{x.unit ? ' ' + x.unit : ''}</span>
+                <span className="inv-bar"><span className="inv-bar-fill" style={{ width: barPct(x) + '%', background: color }} /></span>
+              </div>}
+        </td>
+        <td className="muted">{x.minStock}</td>
+        <td><span className="inv-status" style={{ color }}><span className="inv-dot" style={{ background: color }} />{lbl}</span></td>
         <td>
           {admin ? (
-            <div className="row-actions">
-              <button className="btn ghost sm" onClick={() => setEditItem({ id: x.id, kind, name: x.name, price: x.price ?? 0, category: x.category || '', unit: x.unit || 'pza', station: x.station || 'ninguna', barcode: x.barcode || '', image: x.image || '' })}>Editar</button>
-              <button className="btn ghost sm" onClick={() => setStock({ id: x.id, name: x.name, qty: 0, kind, current: x.stock, reason: '' })}>Ajustar</button>
-              <button className="btn ghost sm" onClick={() => setEditMin({ id: x.id, kind, name: x.name, minStock: x.minStock })}>Mín.</button>
-              {kind === 'products' && <button className="btn ghost sm" onClick={() => openBundle(x)}>Paquete</button>}
-              {kind === 'products' && setting('usarVariantes') && <button className="btn ghost sm" onClick={() => openVariants(x)}>Variantes</button>}
+            <div className="row-actions inv-acts">
+              <button className="icon-btn" title="Editar" onClick={() => setEditItem({ id: x.id, kind, name: x.name, price: x.price ?? 0, category: x.category || '', unit: x.unit || 'pza', station: x.station || 'ninguna', barcode: x.barcode || '', image: x.image || '' })}>
+                <Ic s={15} d={<><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>} />
+              </button>
+              <button className="icon-btn" title="Ajustar stock" onClick={() => setStock({ id: x.id, name: x.name, qty: 0, kind, current: x.stock, reason: '' })}>
+                <Ic s={15} d={<><path d="M12 5v14M5 12h14" /></>} />
+              </button>
+              <button className="icon-btn" title="Stock mínimo" onClick={() => setEditMin({ id: x.id, kind, name: x.name, minStock: x.minStock })}>
+                <Ic s={15} d={<><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /></>} />
+              </button>
+              {kind === 'products' && <button className="icon-btn" title="Paquete" onClick={() => openBundle(x)}>
+                <Ic s={15} d={<><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" /><path d="M3 8l9 5 9-5" /></>} />
+              </button>}
+              {kind === 'products' && setting('usarVariantes') && <button className="icon-btn" title="Variantes" onClick={() => openVariants(x)}>
+                <Ic s={15} d={<><path d="M12 2 2 7l10 5 10-5-10-5Z" /><path d="m2 17 10 5 10-5M2 12l10 5 10-5" /></>} />
+              </button>}
             </div>
           ) : <span className="muted" style={{ fontSize: '.8rem' }}>—</span>}
         </td>
@@ -233,25 +298,54 @@ export default function Inventory() {
   });
 
   function exportXlsx() {
-    const prod = [['Producto', 'Precio', 'Stock', 'Mínimo', 'Estado'], ...products.map(x => [x.name, x.price, x.stock, x.minStock, label(x)[0]])];
-    const sheets = [{ name: 'Productos', rows: prod }];
+    const prodCols = [
+      { label: 'Producto', width: 210 }, { label: 'Categoría', width: 140 },
+      { label: 'Precio', num: true, width: 90 }, { label: 'Stock', num: true, width: 80 },
+      { label: 'Mínimo', num: true, width: 80 }, { label: 'Estado', width: 100 },
+    ];
+    const prodRows = products.map(x => [x.name, x.category || '', Number(x.price) || 0, Number(x.stock) || 0, Number(x.minStock) || 0, label(x)[0]]);
+    const sheets = [{ name: 'Productos', columns: prodCols, rows: prodRows }];
     // Solo incluir insumos si el negocio usa recetas
     if (setting('usarRecetas')) {
-      const sup = [['Insumo', 'Categoría', 'Unidad', 'Stock', 'Mínimo', 'Estado'], ...supplies.map(x => [x.name, x.category, x.unit, x.stock, x.minStock, label(x)[0]])];
-      sheets.unshift({ name: 'Insumos', rows: sup });
+      const supCols = [
+        { label: 'Insumo', width: 210 }, { label: 'Categoría', width: 140 }, { label: 'Unidad', width: 80 },
+        { label: 'Stock', num: true, width: 80 }, { label: 'Mínimo', num: true, width: 80 }, { label: 'Estado', width: 100 },
+      ];
+      const supRows = supplies.map(x => [x.name, x.category || '', x.unit || '', Number(x.stock) || 0, Number(x.minStock) || 0, label(x)[0]]);
+      sheets.unshift({ name: 'Insumos', columns: supCols, rows: supRows });
     }
-    downloadExcel('inventario_' + new Date().toISOString().slice(0, 10), sheets);
+    downloadStyledExcel('inventario_' + new Date().toISOString().slice(0, 10), sheets);
   }
 
   return (
     <>
       <div className="top"><h1>Inventario</h1>
         <div className="row">
-          <button className="btn ghost" onClick={exportXlsx}>⬇ Excel</button>
-          {admin && usaAlmacenes && <button className="btn ghost" onClick={() => setShowWh(true)}>Almacenes</button>}
-          {admin && setting('usarRecetas') && <button className="btn ghost" onClick={() => setNewSupply({ name: '', category: 'General', unit: 'pza', stock: '', minStock: '' })}>Insumo</button>}
-          {admin && <button className="btn ghost" onClick={() => setShowImport(true)}>⬆ Importar</button>}
-          {admin && <button className="btn" onClick={() => setNewProduct({ name: '', price: '', stock: '', minStock: '' })}>Producto</button>}
+          <button className="btn ghost" onClick={exportXlsx}><Ic s={15} d={<><path d="M12 3v12M7 10l5 5 5-5" /><path d="M4 21h16" /></>} /> Exportar</button>
+          {admin && usaAlmacenes && <button className="btn ghost" onClick={() => setShowWh(true)}><Ic s={15} d={<><path d="M3 21h18" /><path d="M5 21V8l7-4 7 4v13" /><path d="M9 21v-6h6v6" /></>} /> Almacenes</button>}
+          {admin && setting('usarRecetas') && <button className="btn ghost" onClick={() => setNewSupply({ name: '', category: 'General', unit: 'pza', stock: '', minStock: '' })}><Ic s={15} d={<><path d="M9 3h6" /><path d="M10 3v5l-4.5 8.1A2 2 0 0 0 7.3 19h9.4a2 2 0 0 0 1.8-2.9L14 8V3" /></>} /> Insumo</button>}
+          {admin && <button className="btn ghost" onClick={() => setShowImport(true)}><Ic s={15} d={<><path d="M12 15V3M7 8l5-5 5 5" /><path d="M4 21h16" /></>} /> Importar</button>}
+          {admin && <button className="btn" onClick={() => setNewProduct({ name: '', price: '', stock: '', minStock: '' })}><Ic s={15} d={<><path d="M12 5v14M5 12h14" /></>} /> Producto</button>}
+        </div>
+      </div>
+
+      {/* Panorama del inventario */}
+      <div className="inv-kpis">
+        <div className="inv-kpi">
+          <span className="inv-kpi-ic plum"><Ic s={18} d={<><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" /><path d="M3 8l9 5 9-5" /><path d="M12 13v9" /></>} /></span>
+          <div><b>{products.length}</b><span>Productos</span></div>
+        </div>
+        <div className="inv-kpi">
+          <span className="inv-kpi-ic gold"><Ic s={18} d={<><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></>} /></span>
+          <div><b>{money(invValue)}</b><span>Valor en stock</span></div>
+        </div>
+        <div className={'inv-kpi' + (lowCount ? ' warn' : '')}>
+          <span className="inv-kpi-ic warn"><Ic s={18} d={<><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4M12 17h.01" /></>} /></span>
+          <div><b>{lowCount}</b><span>Stock bajo</span></div>
+        </div>
+        <div className={'inv-kpi' + (outCount ? ' bad' : '')}>
+          <span className="inv-kpi-ic bad"><Ic s={18} d={<><circle cx="12" cy="12" r="9" /><path d="M15 9l-6 6M9 9l6 6" /></>} /></span>
+          <div><b>{outCount}</b><span>Agotados</span></div>
         </div>
       </div>
       {showImport && <ImportModal title="Importar productos" endpoint="products"
@@ -261,7 +355,7 @@ export default function Inventory() {
       {setting('usarRecetas') && <>
         <div className="sec-title">Insumos</div>
         <div className="card scroll-x" style={{ padding: 0 }}>
-          <table><thead><tr><th>Insumo</th><th>Categoría</th><th>Stock</th><th>Mínimo</th><th>Estado</th><th></th></tr></thead>
+          <table className="inv-tbl"><thead><tr><th>Insumo</th><th>Categoría</th><th>Stock</th><th>Mínimo</th><th>Estado</th><th></th></tr></thead>
             <tbody><Rows list={supplies} kind="supplies" /></tbody></table>
         </div>
       </>}
@@ -276,9 +370,32 @@ export default function Inventory() {
         )}
       </div>
       {whSel && <p className="muted mb" style={{ fontSize: '.8rem', marginTop: -6 }}>Editando el stock en <b>{warehouses.find(w => w.id === whSel)?.name}</b>. El total se actualiza solo.</p>}
+
+      {/* Barra de herramientas: buscar, categoría, solo bajos */}
+      <div className="inv-toolbar">
+        <div className="inv-search">
+          <Ic s={16} d={<><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></>} />
+          <input placeholder="Buscar por nombre, categoría o código…" value={q} onChange={e => setQ(e.target.value)} />
+          {q && <button className="inv-search-x" onClick={() => setQ('')} title="Limpiar"><Ic s={14} d={<><path d="M18 6 6 18M6 6l12 12" /></>} /></button>}
+        </div>
+        {cats.length > 0 && (
+          <div style={{ minWidth: 170 }}>
+            <Select value={cat} onChange={setCat} placeholder="Todas las categorías"
+              options={[{ value: '', label: 'Todas las categorías' }, ...cats.map(c => ({ value: c, label: c }))]} />
+          </div>
+        )}
+        <button className={'inv-filter-chip' + (onlyLow ? ' on' : '')} onClick={() => setOnlyLow(v => !v)}>
+          <Ic s={14} d={<><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4M12 17h.01" /></>} /> Solo stock bajo
+        </button>
+        <span className="inv-count">{shownProducts.length} de {products.length}</span>
+      </div>
+
       <div className="card scroll-x" style={{ padding: 0 }}>
-        <table><thead><tr><th>Producto</th><th>Precio</th><th>{whSel ? 'Stock aquí' : 'Stock'}</th><th>Mínimo</th><th>Estado</th><th></th></tr></thead>
-          <tbody><Rows list={products} kind="products" /></tbody></table>
+        <table className="inv-tbl"><thead><tr><th>Producto</th><th>Precio</th><th>{whSel ? 'Stock aquí' : 'Stock'}</th><th>Mínimo</th><th>Estado</th><th></th></tr></thead>
+          <tbody>
+            <Rows list={shownProducts} kind="products" />
+            {!shownProducts.length && <tr><td colSpan="6" className="empty">{products.length ? 'Ningún producto coincide con los filtros' : 'Sin productos aún'}</td></tr>}
+          </tbody></table>
       </div>
       {!admin && <p className="muted" style={{ marginTop: 12, fontSize: '.82rem' }}>Solo el administrador puede establecer mínimos.</p>}
 

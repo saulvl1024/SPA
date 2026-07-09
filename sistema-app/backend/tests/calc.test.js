@@ -82,6 +82,15 @@ describe('findClash (choque de citas)', () => {
   it('detecta dos citas a la misma hora', () => {
     expect(findClash(appts, '2026-06-08T10:00:00')).toBeTruthy();
   });
+  it('detecta traslape parcial (10:30 cae dentro de una cita de 10:00–11:00)', () => {
+    // Cita existente de 10:00 con duración explícita hasta 11:00
+    const conFin = [{ start: '2026-06-08T10:00:00', end: '2026-06-08T11:00:00', status: 'agendada' }];
+    expect(findClash(conFin, '2026-06-08T10:30:00', '2026-06-08T11:30:00')).toBeTruthy();
+  });
+  it('citas pegadas (una termina donde empieza la otra) NO chocan', () => {
+    const conFin = [{ start: '2026-06-08T10:00:00', end: '2026-06-08T11:00:00', status: 'agendada' }];
+    expect(findClash(conFin, '2026-06-08T11:00:00', '2026-06-08T12:00:00')).toBeNull();
+  });
   it('una cita cancelada no bloquea el horario', () => {
     expect(findClash(appts, '2026-06-08T11:00:00')).toBeNull();
   });

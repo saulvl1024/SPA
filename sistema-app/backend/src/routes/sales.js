@@ -1,13 +1,28 @@
 import { Router } from 'express';
+import bcrypt from 'bcryptjs';
 import { prisma } from '../db.js';
 import { auth } from '../middleware/auth.js';
 import { saleTotals } from '../lib/calc.js';
 import { recalcClientTag } from './tags.js';
 import { logAudit } from '../lib/audit.js';
 import { getLoyaltyConfig } from '../lib/loyalty.js';
+import { getSettings } from './system.js';
 
 const r = Router();
 r.use(auth);
+
+// Verifica que un PIN corresponda a un gerente (admin/superadmin) activo. Devuelve {id,name} o null.
+async function verifyManagerPin(pin) {
+  if (!pin) return null;
+  const managers = await prisma.staff.findMany({
+    where: { role: { in: ['admin', 'superadmin'] }, active: true },
+    select: { id: true, name: true, pinHash: true },
+  });
+  for (const m of managers) {
+    if (m.pinHash && bcrypt.compareSync(String(pin), m.pinHash)) return { id: m.id, name: m.name };
+  }
+  return null;
+}
 
 const PAYMENT_METHODS = ['efectivo', 'tarjeta', 'transferencia'];
 const cents = n => Math.round((Number(n) || 0) * 100);
@@ -38,31 +53,39 @@ function normalizePayments(total, paymentMethod, payments) {
 // Historial (admin: todas; empleada: las suyas). ?date=YYYY-MM-DD opcional
 r.get('/', async (req, res) => {
   const where = {};
+  // Interpreta fechas como día LOCAL (no UTC) para evitar corrimiento de zona horaria.
+  const dayStart = ymd => { const [y, m, d] = ymd.split('-').map(Number); return new Date(y, m - 1, d, 0, 0, 0, 0); };
+  const dayEnd = ymd => { const [y, m, d] = ymd.split('-').map(Number); return new Date(y, m - 1, d, 23, 59, 59, 999); };
+  let rango = false;
   if (req.query.date) {
-    // Interpretar la fecha como día LOCAL (no UTC) para evitar corrimiento de zona horaria
-    const [yy, mm, dd] = req.query.date.split('-').map(Number);
-    const s = new Date(yy, mm - 1, dd, 0, 0, 0, 0);
-    const e = new Date(yy, mm - 1, dd, 23, 59, 59, 999);
-    where.date = { gte: s, lte: e };
+    where.date = { gte: dayStart(req.query.date), lte: dayEnd(req.query.date) };
+    rango = true;
+  } else if (req.query.from && req.query.to) {
+    // Rango [from, to] inclusivo — usado por Comisiones para traer solo el mes elegido (sin truncar)
+    where.date = { gte: dayStart(req.query.from), lte: dayEnd(req.query.to) };
+    rango = true;
   }
   // Ve todas las ventas: admin o quien tenga un módulo analítico; el resto solo las suyas.
   const analytic = ['reportes', 'comisiones', 'caja', 'gastos'];
   const canSeeAll = req.user.role === 'admin' || analytic.some(p => (req.user.perms || []).includes(p));
   if (!canSeeAll) where.cashierId = req.user.id;
+  // Con rango de fechas el resultado ya está acotado por tiempo → tope alto para no truncar el periodo.
+  // Sin rango (actividad reciente) se mantiene un tope prudente.
   const sales = await prisma.sale.findMany({
     where, include: { client: true, cashier: true, items: true, payments: true },
-    orderBy: { date: 'desc' }, take: 500,
+    orderBy: { date: 'desc' }, take: rango ? 5000 : 500,
   });
   res.json(sales);
 });
 
 // Cobrar: crea venta, descuenta stock, sesiones, saldo; otorga puntos
 r.post('/', async (req, res) => {
-  const { clientId, sessionId, items = [], discount = 0, useCredit = false, paymentMethod = 'efectivo', payments, redeemPoints = 0 } = req.body;
+  const { clientId, sessionId, items = [], discount = 0, useCredit = false, paymentMethod = 'efectivo', payments, redeemPoints = 0, tip = 0 } = req.body;
   if (!items.length) return res.status(400).json({ error: 'Agrega al menos un producto o servicio' });
 
   try {
     const loyaltyCfg = await getLoyaltyConfig();
+    const { allowZeroStock } = await getSettings(); // ¿permite vender sin existencias?
     // Multi-almacén: ¿de qué almacén se descuenta? El asignado al cajero, o el principal.
     const sysCfg = await prisma.systemConfig.findUnique({ where: { id: 'singleton' } });
     const usaAlmacenes = sysCfg?.settings?.usarAlmacenes === true;
@@ -129,17 +152,17 @@ r.post('/', async (req, res) => {
           if (i.variantId) {
             const v = p.variants.find(x => x.id === i.variantId);
             if (!v) throw new Error('Variante inválida');
-            if (v.stock < qty) throw new Error(`Sin stock suficiente de ${p.name} (${v.name})`);
+            if (!allowZeroStock && v.stock < qty) throw new Error(`Sin stock suficiente de ${p.name} (${v.name})`);
             safeItems.push({ type: 'producto', refId: p.id, variantId: v.id, name: `${p.name} (${v.name})`, qty, price: v.price != null ? v.price : p.price });
           } else if (p.isBundle && p.components.length) {
             // Valida stock de cada componente con lookup O(1) en el Map (sin más queries)
             for (const c of p.components) {
               const stock = compStock.get(c.componentId);
-              if (stock == null || stock < c.qty * qty) throw new Error(`Sin stock suficiente para el paquete ${p.name}`);
+              if (!allowZeroStock && (stock == null || stock < c.qty * qty)) throw new Error(`Sin stock suficiente para el paquete ${p.name}`);
             }
             safeItems.push({ type: 'producto', refId: p.id, isBundle: true, components: p.components, name: p.name, qty, price: p.price });
           } else {
-            if (p.stock < qty) throw new Error(`Sin stock suficiente de ${p.name}`);
+            if (!allowZeroStock && p.stock < qty) throw new Error(`Sin stock suficiente de ${p.name}`);
             safeItems.push({ type: 'producto', refId: p.id, name: p.name, qty, price: p.price });
           }
         } else if (i.type === 'paquete') {
@@ -162,7 +185,10 @@ r.post('/', async (req, res) => {
           redeemPoints, clientPoints: client.points,
           pointsPerCurrency: loyaltyCfg.pointsPerCurrency, redeemValue: loyaltyCfg.redeemValue, minRedeem: loyaltyCfg.minRedeem,
         });
-      const salePayments = normalizePayments(total, paymentMethod, payments);
+      // Propina: se suma al total a cobrar (los pagos cuadran con total+propina). No es ingreso.
+      const tipAmount = Math.max(0, Math.round((Number(tip) || 0) * 100) / 100);
+      const grandTotal = total + tipAmount;
+      const salePayments = normalizePayments(grandTotal, paymentMethod, payments);
 
       // Descuenta del nivel de un almacén (sin bajar de 0). Solo si multi-almacén está activo.
       async function decWarehouse(productId, qty) {
@@ -193,25 +219,40 @@ r.post('/', async (req, res) => {
         if (i.type === 'servicio' && !i.fromPackage) {
           const recipe = await tx.serviceSupply.findMany({ where: { serviceId: i.refId } });
           for (const rs of recipe) await tx.supply.update({ where: { id: rs.supplyId }, data: { stock: { decrement: rs.qty } } });
+          i._recipe = recipe.map(rs => ({ supplyId: rs.supplyId, qty: rs.qty })); // para revertir al cancelar
         }
         if (i.type === 'paquete') {
           const pk = i._pkg; const expiresAt = new Date(); expiresAt.setMonth(expiresAt.getMonth() + pk.validityMonths);
-          await tx.clientPackage.create({ data: { clientId: finalClientId, packageId: pk.id, serviceId: null, total: pk.sessions, remaining: pk.sessions, expiresAt } });
+          const cp = await tx.clientPackage.create({ data: { clientId: finalClientId, packageId: pk.id, serviceId: null, total: pk.sessions, remaining: pk.sessions, expiresAt } });
+          i._createdPkgId = cp.id; // para eliminar el paquete al cancelar
         }
         if (i.type === 'anticipo') await tx.client.update({ where: { id: finalClientId }, data: { credit: { increment: i.price } } });
       }
       if (creditUsed > 0) await tx.client.update({ where: { id: finalClientId }, data: { credit: { decrement: creditUsed } } });
-      if (points > 0) await tx.client.update({ where: { id: finalClientId }, data: { points: { increment: points } } });
+      // Puntos NETOS (ganados − canjeados): puede ser negativo si el cliente canjeó más de lo que ganó.
+      // increment con número negativo descuenta correctamente el saldo. (saleTotals garantiza que no baje de 0.)
+      if (points !== 0) await tx.client.update({ where: { id: finalClientId }, data: { points: { increment: points } } });
 
       return tx.sale.create({
         data: {
           clientId: finalClientId, cashierId: req.user.id, sessionId: sessionId || null,
-          subtotal, discount: safeDiscount, creditUsed, total, paymentMethod: salePayments[0].method, points,
+          subtotal, discount: safeDiscount, creditUsed, total: grandTotal, tip: tipAmount, paymentMethod: salePayments[0].method, points,
           pointsRedeemed: pointsRedeemed || 0, pointsDiscount: pointsDiscount || 0,
-          items: { create: safeItems.map(i => ({
-            type: i.type, refId: i.refId || null, name: i.name, qty: i.qty,
-            price: i.price, specialistId: i.specialistId || null, fromPackage: !!i.fromPackage,
-          })) },
+          items: { create: safeItems.map(i => {
+            // meta para poder revertir con exactitud al cancelar
+            const meta = {};
+            if (i.type === 'producto' && i.isBundle && i.components) meta.bundle = i.components.map(c => ({ componentId: c.componentId, qty: c.qty }));
+            if (i.type === 'servicio' && i.fromPackage && i.packageId) meta.packageId = i.packageId;
+            if (i.type === 'servicio' && i._recipe) meta.recipe = i._recipe;
+            if (i.type === 'paquete' && i._createdPkgId) meta.createdPackageId = i._createdPkgId;
+            return {
+              type: i.type, refId: i.refId || null, name: i.name, qty: i.qty,
+              price: i.price, specialistId: i.specialistId || null, fromPackage: !!i.fromPackage,
+              variantId: i.variantId || null,
+              warehouseId: (i.type === 'producto' && saleWarehouseId) ? saleWarehouseId : null,
+              meta: Object.keys(meta).length ? meta : undefined,
+            };
+          }) },
           payments: { create: salePayments },
         },
         include: { items: true, client: true, payments: true },
@@ -234,7 +275,16 @@ r.post('/', async (req, res) => {
 // CANCELAR / DEVOLVER un ticket: marca la venta como anulada, regresa el producto al stock,
 // revierte puntos y crédito. Solo admin. Queda en auditoría.
 r.post('/:id/void', async (req, res) => {
-  if (req.user.role !== 'admin' && req.user.role !== 'superadmin') return res.status(403).json({ error: 'Solo el administrador puede cancelar ventas' });
+  // Autorización: si el negocio exige PIN de gerente, se valida el PIN; si no, debe ser admin.
+  const settings = await getSettings();
+  let authorizedBy = null;
+  if (settings.pinCancelSale) {
+    const mgr = await verifyManagerPin(req.body.managerPin);
+    if (!mgr) return res.status(403).json({ error: 'Se requiere el PIN de un gerente para cancelar.' });
+    authorizedBy = mgr.name;
+  } else if (req.user.role !== 'admin' && req.user.role !== 'superadmin') {
+    return res.status(403).json({ error: 'Solo el administrador puede cancelar ventas' });
+  }
   const reason = (req.body.reason || '').toString().trim();
   if (!reason) return res.status(400).json({ error: 'Indica el motivo de la cancelación' });
 
@@ -244,19 +294,60 @@ r.post('/:id/void', async (req, res) => {
       if (!sale) throw new Error('Venta no encontrada');
       if (sale.voided) throw new Error('Esta venta ya fue cancelada');
 
-      // Regresa al stock cada producto vendido (servicios y anticipos no afectan stock)
+      // Regresa stock a un almacén concreto (multi-almacén), reflejo de decWarehouse.
+      async function incWarehouse(productId, qty, whId) {
+        if (!whId) return;
+        const lvl = await tx.stockLevel.findUnique({ where: { productId_warehouseId: { productId, warehouseId: whId } }, select: { qty: true } });
+        const newQty = (lvl?.qty || 0) + qty;
+        await tx.stockLevel.upsert({
+          where: { productId_warehouseId: { productId, warehouseId: whId } },
+          update: { qty: newQty }, create: { productId, warehouseId: whId, qty: newQty },
+        });
+      }
+
+      // Revierte los efectos de inventario/paquetes de cada línea, usando el detalle guardado.
       for (const it of sale.items) {
-        if (it.type === 'producto' && it.refId) {
-          await tx.product.update({ where: { id: it.refId }, data: { stock: { increment: it.qty } } }).catch(() => {});
+        const m = it.meta || {};
+        if (it.type === 'producto') {
+          if (it.variantId) {
+            await tx.productVariant.update({ where: { id: it.variantId }, data: { stock: { increment: it.qty } } }).catch(() => {});
+          } else if (Array.isArray(m.bundle) && m.bundle.length) {
+            for (const c of m.bundle) {
+              await tx.product.update({ where: { id: c.componentId }, data: { stock: { increment: c.qty * it.qty } } }).catch(() => {});
+              await incWarehouse(c.componentId, c.qty * it.qty, it.warehouseId);
+            }
+          } else if (it.refId) {
+            await tx.product.update({ where: { id: it.refId }, data: { stock: { increment: it.qty } } }).catch(() => {});
+            await incWarehouse(it.refId, it.qty, it.warehouseId);
+          }
+        } else if (it.type === 'servicio') {
+          if (it.fromPackage && m.packageId) {
+            // Devuelve la sesión al paquete (sin exceder el total)
+            const cp = await tx.clientPackage.findUnique({ where: { id: m.packageId } }).catch(() => null);
+            if (cp && cp.remaining < cp.total) await tx.clientPackage.update({ where: { id: cp.id }, data: { remaining: { increment: 1 } } }).catch(() => {});
+          } else if (Array.isArray(m.recipe) && m.recipe.length) {
+            for (const rs of m.recipe) await tx.supply.update({ where: { id: rs.supplyId }, data: { stock: { increment: rs.qty } } }).catch(() => {});
+          }
+        } else if (it.type === 'paquete' && m.createdPackageId) {
+          // Elimina el paquete creado con esta venta. Si ya tiene sesiones usadas, NO se puede
+          // cancelar limpiamente: se aborta toda la transacción para no dejar inconsistencia.
+          const cp = await tx.clientPackage.findUnique({ where: { id: m.createdPackageId } });
+          if (cp) {
+            if (cp.remaining !== cp.total) throw new Error('No se puede cancelar: el paquete vendido ya tiene sesiones usadas. Ajusta el paquete manualmente antes de cancelar.');
+            await tx.clientPackage.delete({ where: { id: cp.id } }); // sin catch: si falla, revierte todo
+          }
+        } else if (it.type === 'anticipo') {
+          // Revierte el saldo a favor que otorgó el anticipo
+          await tx.client.update({ where: { id: sale.clientId }, data: { credit: { decrement: it.price } } }).catch(() => {});
         }
       }
-      // Revierte puntos otorgados y crédito usado
+      // Revierte puntos otorgados y crédito usado en la venta
       if (sale.points) await tx.client.update({ where: { id: sale.clientId }, data: { points: { decrement: sale.points } } }).catch(() => {});
       if (sale.creditUsed) await tx.client.update({ where: { id: sale.clientId }, data: { credit: { increment: sale.creditUsed } } }).catch(() => {});
 
       return tx.sale.update({ where: { id: sale.id }, data: { voided: true, voidReason: reason, voidedAt: new Date() } });
     });
-    logAudit(req, { module: 'pos', action: 'cancelar_venta', summary: `Canceló ticket #${result.ticketNo} por ${'$' + result.total} · motivo: ${reason}`, refId: result.id, meta: { reason } });
+    logAudit(req, { module: 'pos', action: 'cancelar_venta', summary: `Canceló ticket #${result.ticketNo} por ${'$' + result.total} · motivo: ${reason}${authorizedBy ? ' · autorizó: ' + authorizedBy : ''}`, refId: result.id, meta: { reason, authorizedBy } });
     res.json({ ok: true, sale: result });
   } catch (e) {
     res.status(400).json({ error: e.message || 'No se pudo cancelar' });

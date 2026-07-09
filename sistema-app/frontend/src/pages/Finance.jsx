@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { money, downloadExcel, toast } from '../ui.jsx';
+import { money, downloadStyledExcel, toast } from '../ui.jsx';
 import { isModuleEnabled } from '../permissions.js';
 import DateField from '../components/DateField.jsx';
 
@@ -117,14 +117,14 @@ export default function Finance() {
     const rentables = [['Artículo', 'Margen $', 'Margen %'], ...(c.topRentables || []).map(i => [i.name, i.margen, Math.round(i.margenPct || 0)])];
     const clientes = [['Cliente', 'Visitas', 'Gasto'], ...c.topClientes.map(x => [x.name, x.visitas, x.total])];
     const origen = [['Canal', 'Clientes', 'Ingresos'], ...c.origen.map(o => [o.source, o.clientes, o.ingresos])];
-    downloadExcel(`finanzas_${from}_a_${to}`, [{ name: 'Resumen', rows: resumen }, { name: 'Top artículos', rows: items }, { name: 'Más rentables', rows: rentables }, { name: 'Top clientes', rows: clientes }, { name: 'Origen', rows: origen }]);
+    downloadStyledExcel(`finanzas_${from}_a_${to}`, [{ name: 'Resumen', rows: resumen }, { name: 'Top artículos', rows: items }, { name: 'Más rentables', rows: rentables }, { name: 'Top clientes', rows: clientes }, { name: 'Origen', rows: origen }]);
   }
 
   return (
     <>
       <div className="top">
         <div><h1>Finanzas y BI</h1><div className="sub">Análisis del negocio</div></div>
-        <button className="btn ghost" onClick={exportXlsx}>⬇ Excel</button>
+        <button className="btn ghost" onClick={exportXlsx}>Exportar</button>
       </div>
 
       {/* Filtros: atajos de periodo + rango personalizado */}

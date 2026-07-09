@@ -104,7 +104,43 @@ export const DEFAULT_SETTINGS = {
   usarAlmacenes: false,          // multi-almacén/sucursales (off por defecto: la mayoría tiene 1)
   envioGratisDesde: 0,           // cotizaciones: umbral $ para envío gratis automático (0 = desactivado)
   whatsappNumero: '',            // número de WhatsApp del negocio (formato internacional, ej. 5218112345678) para enviar cotizaciones
+  // Visibilidad de las pestañas del CRM (editable por el admin). true = visible.
+  crmTabs: { empresas: true, tratos: true, proyectos: true, campanas: true, automatizaciones: true, cumple: true, seguimientos: true, origen: true },
+  // Marca y datos del negocio (aparecen en tickets, cotizaciones, menú público)
+  logo: '',                 // logo en base64 (data URL); se ajusta por CSS en cada documento
+  businessAddress: '',
+  businessPhone: '',
+  businessEmail: '',
+  businessRfc: '',
+  businessLegalName: '',
+  ticketFooter: '',         // texto al pie del ticket de venta (ej. "¡Gracias por tu compra!")
+  // Seguridad
+  pinCancelSale: false,     // pedir PIN de gerente para cancelar/devolver ventas
+  pinStockAdjust: false,    // pedir PIN de gerente para ajustar stock
+  pinBigDiscount: false,    // pedir PIN para descuentos mayores al máximo permitido
+  sessionTimeoutMin: 0,     // cierre de sesión automático por inactividad (min; 0 = desactivado)
+  // Ventas / POS
+  ivaDefault: 0,            // % de IVA por defecto
+  pricesIncludeIva: true,   // los precios ya incluyen IVA
+  tipEnabled: false,        // sugerir propina en el cobro
+  tipSuggested: 10,         // % de propina sugerido
+  maxDiscountPct: 100,      // descuento máximo (%) que un empleado puede dar sin autorización
+  payCash: true, payCard: true, payTransfer: true,  // métodos de pago aceptados
+  // Agenda / inventario
+  apptDefaultMin: 60,       // duración por defecto de una cita (min)
+  reminderHoursBefore: 24,  // horas antes para el recordatorio de cita
+  stockAlert: 5,            // umbral de alerta de stock bajo
+  allowZeroStock: false,    // permitir vender con stock en cero
 };
+
+// Ajustes que el ADMIN (no solo súper-admin) puede modificar desde su pantalla de ajustes
+export const ADMIN_EDITABLE_SETTINGS = [
+  'crmTabs', 'envioGratisDesde', 'whatsappNumero',
+  'logo', 'businessAddress', 'businessPhone', 'businessEmail', 'businessRfc', 'businessLegalName', 'ticketFooter',
+  'pinCancelSale', 'pinStockAdjust', 'pinBigDiscount', 'sessionTimeoutMin',
+  'ivaDefault', 'pricesIncludeIva', 'tipEnabled', 'tipSuggested', 'maxDiscountPct', 'payCash', 'payCard', 'payTransfer',
+  'apptDefaultMin', 'reminderHoursBefore', 'stockAlert', 'allowZeroStock',
+];
 function mergeSettings(s) { return { ...DEFAULT_SETTINGS, ...(s && typeof s === 'object' ? s : {}) }; }
 
 // Lee los ajustes del negocio (con defaults aplicados). Usable desde otras rutas.
@@ -159,6 +195,20 @@ r.put('/superadmin/config', auth, async (req, res) => {
     },
   });
   res.json({ businessName: updated.businessName, businessType: updated.businessType, settings: mergeSettings(updated.settings), disabledModules: updated.disabledModules });
+});
+
+// Ajustes editables por el ADMIN (subconjunto seguro: pestañas del CRM, cotizaciones)
+r.put('/admin-settings', auth, async (req, res) => {
+  const role = req.user?.role;
+  if (role !== 'admin' && role !== 'superadmin') return res.status(403).json({ error: 'No autorizado' });
+  const cfg = await getConfig();
+  const next = mergeSettings(cfg.settings);
+  const patch = (req.body && req.body.settings) || {};
+  for (const k of ADMIN_EDITABLE_SETTINGS) if (patch[k] !== undefined) next[k] = patch[k];
+  const data = { settings: next };
+  if (req.body.businessName !== undefined) data.businessName = req.body.businessName || null; // el admin puede cambiar el nombre del negocio
+  const updated = await prisma.systemConfig.update({ where: { id: cfg.id }, data });
+  res.json({ settings: mergeSettings(updated.settings), businessName: updated.businessName });
 });
 
 export default r;

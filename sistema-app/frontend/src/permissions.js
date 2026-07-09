@@ -23,6 +23,20 @@ let _settings = {};
 export function setSettings(s) { _settings = (s && typeof s === 'object') ? s : {}; }
 export function setting(key, def = true) { return _settings[key] !== undefined ? _settings[key] : def; }
 
+// Logo del negocio (data URL base64) y datos de marca — para tickets, cotizaciones, etc.
+export function businessLogo() { return _settings.logo || ''; }
+export function businessInfo() {
+  return {
+    name: _businessName,
+    address: _settings.businessAddress || '',
+    phone: _settings.businessPhone || '',
+    email: _settings.businessEmail || '',
+    rfc: _settings.businessRfc || '',
+    legalName: _settings.businessLegalName || '',
+    ticketFooter: _settings.ticketFooter || '',
+  };
+}
+
 // ¿El usuario puede ver/usar un módulo?
 export function can(user, moduleKey) {
   if (!user) return false;

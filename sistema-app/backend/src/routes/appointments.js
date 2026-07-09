@@ -44,14 +44,21 @@ r.post('/', async (req, res) => {
       return res.status(409).json({ error: `${sp.name} atiende de ${day.from} a ${day.to} ese día.` });
   }
 
-  // Validar choque: mismo especialista, misma fecha y hora (ignora canceladas/no asistió)
-  const sameStaff = await prisma.appointment.findMany({ where: { staffId }, include: { client: true } });
-  const clash = findClash(sameStaff, when);
+  // Hora de fin = inicio + duración del servicio (para validar traslapes y calcular huecos)
+  const svc = await prisma.service.findUnique({ where: { id: serviceId } });
+  const end = new Date(when.getTime() + (svc?.durationMin || 60) * 60000);
+
+  // Validar choque por SOLAPAMIENTO de rangos del mismo especialista (ignora canceladas/no asistió).
+  // Solo consideramos citas del mismo día para no traer todo el historial.
+  const dayStart = new Date(when); dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(when); dayEnd.setHours(23, 59, 59, 999);
+  const sameStaff = await prisma.appointment.findMany({ where: { staffId, start: { gte: dayStart, lte: dayEnd } }, include: { client: true } });
+  const clash = findClash(sameStaff, when, end);
   if (clash) {
-    return res.status(409).json({ error: `Ese horario ya está ocupado con ${clash.client?.name || 'otra cita'} para esa especialista.` });
+    return res.status(409).json({ error: `Ese horario se traslapa con la cita de ${clash.client?.name || 'otra persona'} (${new Date(clash.start).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}).` });
   }
   const appt = await prisma.appointment.create({
-    data: { clientId, staffId, serviceId, start: when, status: 'agendada' },
+    data: { clientId, staffId, serviceId, start: when, end, status: 'agendada' },
     include: { client: true, service: true },
   });
   // Confirmación automática por WhatsApp (no bloquea ni rompe la respuesta)

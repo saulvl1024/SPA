@@ -8,29 +8,59 @@ r.use(auth, requirePerm('crm'));
 
 const money = n => '$' + (Number(n) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Etapas por defecto (estándar de ventas) — se crean la primera vez
-const DEFAULT_STAGES = [
-  { name: 'Prospecto', order: 0 },
-  { name: 'Contactado', order: 1 },
-  { name: 'Propuesta', order: 2 },
-  { name: 'Negociación', order: 3 },
-  { name: 'Ganado', order: 4, isWon: true },
-  { name: 'Perdido', order: 5, isLost: true },
-];
+// Etapas por defecto por embudo — se crean la primera vez que se abre cada uno
+const DEFAULT_STAGES = {
+  b2c: [
+    { name: 'Nuevo', order: 0 },
+    { name: 'Contactado', order: 1 },
+    { name: 'Interesado', order: 2 },
+    { name: 'Ganado', order: 3, isWon: true },
+    { name: 'Perdido', order: 4, isLost: true },
+  ],
+  b2b: [
+    { name: 'Prospecto', order: 0 },
+    { name: 'Calificación', order: 1 },
+    { name: 'Propuesta', order: 2 },
+    { name: 'Negociación', order: 3 },
+    { name: 'Ganado', order: 4, isWon: true },
+    { name: 'Perdido', order: 5, isLost: true },
+  ],
+};
+const PIPE = p => (p === 'b2b' ? 'b2b' : 'b2c'); // normaliza el embudo
 
-async function ensureStages() {
-  const count = await prisma.dealStage.count();
-  if (count === 0) {
-    for (const s of DEFAULT_STAGES) await prisma.dealStage.create({ data: s });
+// Memoriza el sembrado por embudo para evitar duplicados por peticiones simultáneas (carrera).
+const seedLocks = {};
+async function ensureStages(pipeline = 'b2c') {
+  const pipe = PIPE(pipeline);
+  if (!seedLocks[pipe]) {
+    seedLocks[pipe] = (async () => {
+      const existing = await prisma.dealStage.findMany({ where: { pipeline: pipe }, orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] });
+      if (existing.length === 0) {
+        for (const s of (DEFAULT_STAGES[pipe] || DEFAULT_STAGES.b2c)) await prisma.dealStage.create({ data: { ...s, pipeline: pipe } });
+      } else {
+        // Limpia duplicados por nombre (creados por carreras previas): conserva el primero y mueve sus tratos
+        const seen = new Map();
+        for (const st of existing) {
+          const key = st.name.trim().toLowerCase();
+          if (seen.has(key)) {
+            await prisma.deal.updateMany({ where: { stageId: st.id }, data: { stageId: seen.get(key) } });
+            await prisma.dealStage.delete({ where: { id: st.id } });
+          } else seen.set(key, st.id);
+        }
+      }
+    })().catch(() => { seedLocks[pipe] = null; }); // si falla, permite reintentar
   }
-  return prisma.dealStage.findMany({ orderBy: { order: 'asc' } });
+  await seedLocks[pipe];
+  return prisma.dealStage.findMany({ where: { pipeline: pipe }, orderBy: { order: 'asc' } });
 }
 
 // Tablero: etapas con sus tratos y totales
 r.get('/board', async (req, res) => {
-  const stages = await ensureStages();
-  // Filtro opcional por vendedor (?ownerId). El staff trae nombre para mostrar en la tarjeta.
-  const where = req.query.ownerId ? { ownerId: req.query.ownerId } : {};
+  const stages = await ensureStages(req.query.pipeline);
+  const stageIds = stages.map(s => s.id);
+  // Solo los tratos de las etapas de ESTE embudo. Filtro opcional por vendedor (?ownerId).
+  const where = { stageId: { in: stageIds } };
+  if (req.query.ownerId) where.ownerId = req.query.ownerId;
   const deals = await prisma.deal.findMany({
     where,
     include: { client: { select: { name: true, phone: true } }, owner: { select: { id: true, name: true } } },
@@ -65,8 +95,10 @@ r.get('/board', async (req, res) => {
 
 // MÉTRICAS del embudo: conversión y tiempo por etapa. Acepta ?ownerId para filtrar por vendedor.
 r.get('/metrics', async (req, res) => {
-  const stages = await ensureStages();
-  const where = req.query.ownerId ? { ownerId: req.query.ownerId } : {};
+  const stages = await ensureStages(req.query.pipeline);
+  const stageIds = stages.map(s => s.id);
+  const where = { stageId: { in: stageIds } };
+  if (req.query.ownerId) where.ownerId = req.query.ownerId;
   const deals = await prisma.deal.findMany({ where, select: { stageId: true, amount: true, createdAt: true, closedAt: true } });
 
   const now = Date.now();
@@ -114,9 +146,11 @@ r.get('/metrics', async (req, res) => {
 
 // TABLERO POR VENDEDOR: desempeño de cada vendedor (para el admin).
 r.get('/sellers-board', async (_req, res) => {
-  const stages = await ensureStages();
-  const wonId = stages.find(s => s.isWon)?.id;
-  const lostId = stages.find(s => s.isLost)?.id;
+  // Desempeño global (ambos embudos): junta las etapas ganado/perdido de todos los embudos
+  await ensureStages('b2c'); await ensureStages('b2b');
+  const allStages = await prisma.dealStage.findMany({ select: { id: true, isWon: true, isLost: true } });
+  const wonIds = new Set(allStages.filter(s => s.isWon).map(s => s.id));
+  const lostIds = new Set(allStages.filter(s => s.isLost).map(s => s.id));
 
   const [deals, staff, followups] = await Promise.all([
     prisma.deal.findMany({ where: { ownerId: { not: null } }, select: { ownerId: true, amount: true, stageId: true } }),
@@ -135,8 +169,8 @@ r.get('/sellers-board', async (_req, res) => {
   };
   deals.forEach(d => {
     const r = ensure(d.ownerId);
-    if (d.stageId === wonId) r.won++;
-    else if (d.stageId === lostId) r.lost++;
+    if (wonIds.has(d.stageId)) r.won++;
+    else if (lostIds.has(d.stageId)) r.lost++;
     else { r.open++; r.openValue += d.amount || 0; }
   });
   followups.forEach(f => {
@@ -153,14 +187,107 @@ r.get('/sellers-board', async (_req, res) => {
   res.json(list);
 });
 
-// Etapas (para selectores / configuración)
-r.get('/stages', async (_req, res) => res.json(await ensureStages()));
+// Exportar todas las oportunidades (con nombre de etapa, embudo y cliente ligado)
+r.get('/export', async (_req, res) => {
+  const stages = await prisma.dealStage.findMany({ select: { id: true, name: true, pipeline: true } });
+  const smap = new Map(stages.map(s => [s.id, s]));
+  const deals = await prisma.deal.findMany({
+    include: { client: { select: { name: true, phone: true } }, owner: { select: { name: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(deals.map(d => {
+    const st = smap.get(d.stageId);
+    return {
+      title: d.title, amount: d.amount || 0,
+      cliente: d.client?.name || d.contactName || '',
+      telefono: d.client?.phone || '',
+      etapa: st?.name || '', embudo: st?.pipeline || 'b2c',
+      vendedor: d.owner?.name || '', notes: d.notes || '',
+    };
+  }));
+});
 
-// Crear trato
+// Importar oportunidades [{title, amount, cliente, telefono, etapa, embudo, notes}].
+// Liga cliente por teléfono o nombre (si existe). Etapa por nombre dentro del embudo; si no, la primera.
+r.post('/import', async (req, res) => {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  let created = 0, skipped = 0; const errors = [];
+  await ensureStages('b2c'); await ensureStages('b2b');
+  const allStages = await prisma.dealStage.findMany();
+  const clientsAll = await prisma.client.findMany({ select: { id: true, name: true, phone: true } });
+  const byPhone = new Map(); const byName = new Map();
+  clientsAll.forEach(c => { const dg = (c.phone || '').replace(/\D/g, ''); if (dg) byPhone.set(dg, c.id); byName.set(c.name.trim().toLowerCase(), c.id); });
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] || {};
+    const title = (row.title || '').toString().trim();
+    if (!title) { skipped++; continue; }
+    try {
+      const pipe = (row.embudo || 'b2c').toString().toLowerCase() === 'b2b' ? 'b2b' : 'b2c';
+      const stName = (row.etapa || '').toString().trim().toLowerCase();
+      const stagesP = allStages.filter(s => s.pipeline === pipe).sort((a, b) => a.order - b.order);
+      const stage = stagesP.find(s => s.name.trim().toLowerCase() === stName) || stagesP[0];
+      if (!stage) { errors.push(`Fila ${i + 1} (${title}): sin etapas en el embudo ${pipe.toUpperCase()}`); continue; }
+      let clientId = null; const contactName = (row.cliente || '').toString().trim();
+      const dg = (row.telefono || '').toString().replace(/\D/g, '');
+      if (dg && byPhone.has(dg)) clientId = byPhone.get(dg);
+      else if (contactName && byName.has(contactName.toLowerCase())) clientId = byName.get(contactName.toLowerCase());
+      const amt = Math.min(Math.max(Number(row.amount) || 0, 0), 999999999);
+      await prisma.deal.create({
+        data: {
+          title, amount: amt, clientId,
+          contactName: clientId ? null : (contactName || null),
+          stageId: stage.id, notes: (row.notes || '').toString().trim() || null,
+          ownerId: req.user.id, order: Date.now() + i,
+        },
+      });
+      created++;
+    } catch (e) { errors.push(`Fila ${i + 1} (${title}): ${e.message}`); }
+  }
+  res.json({ created, skipped, errors, total: rows.length });
+});
+
+// Etapas (para selectores / configuración) — por embudo
+r.get('/stages', async (req, res) => res.json(await ensureStages(req.query.pipeline)));
+
+// Crear una etapa nueva (se inserta antes de las etapas de cierre Ganado/Perdido)
+r.post('/stages', async (req, res) => {
+  const { name, pipeline } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Falta el nombre de la etapa' });
+  const pipe = PIPE(pipeline);
+  await ensureStages(pipe);
+  const closing = await prisma.dealStage.findMany({ where: { pipeline: pipe, OR: [{ isWon: true }, { isLost: true }] }, orderBy: { order: 'asc' } });
+  const insertOrder = closing.length ? closing[0].order : await prisma.dealStage.count({ where: { pipeline: pipe } });
+  // Recorre las etapas de cierre una posición para dejar espacio
+  for (const c of closing) await prisma.dealStage.update({ where: { id: c.id }, data: { order: c.order + 1 } });
+  const stage = await prisma.dealStage.create({ data: { name: name.trim(), pipeline: pipe, order: insertOrder } });
+  logAudit(req, { module: 'crm', action: 'alta_etapa', summary: `Creó la etapa "${stage.name}" en el embudo ${pipe.toUpperCase()}`, refId: stage.id });
+  res.status(201).json(stage);
+});
+
+// Renombrar una etapa
+r.put('/stages/:id', async (req, res) => {
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Falta el nombre' });
+  const stage = await prisma.dealStage.update({ where: { id: req.params.id }, data: { name } });
+  res.json(stage);
+});
+
+// Eliminar una etapa (no las de cierre; y solo si no tiene oportunidades)
+r.delete('/stages/:id', async (req, res) => {
+  const stage = await prisma.dealStage.findUnique({ where: { id: req.params.id }, include: { _count: { select: { deals: true } } } });
+  if (!stage) return res.status(404).json({ error: 'Etapa no encontrada' });
+  if (stage.isWon || stage.isLost) return res.status(400).json({ error: 'No se puede eliminar la etapa de cierre (Ganado / Perdido).' });
+  if (stage._count.deals > 0) return res.status(400).json({ error: 'Mueve las oportunidades de esta etapa a otra antes de eliminarla.' });
+  await prisma.dealStage.delete({ where: { id: req.params.id } });
+  logAudit(req, { module: 'crm', action: 'baja_etapa', summary: `Eliminó la etapa "${stage.name}"`, refId: stage.id });
+  res.json({ ok: true });
+});
+
+// Crear trato (en el embudo indicado; por defecto B2C)
 r.post('/', async (req, res) => {
-  const { title, amount, clientId, contactName, stageId, notes } = req.body;
+  const { title, amount, clientId, contactName, stageId, notes, pipeline } = req.body;
   if (!title) return res.status(400).json({ error: 'Falta el título del trato' });
-  const stages = await ensureStages();
+  const stages = await ensureStages(pipeline);
   const stage = stageId ? stages.find(s => s.id === stageId) : stages[0];
   if (!stage) return res.status(400).json({ error: 'Etapa inválida' });
   const amt = Math.min(Math.max(Number(amount) || 0, 0), 999999999); // 0 .. ~1,000 millones

@@ -101,6 +101,8 @@ model Client {
   credit      Float     @default(0) // saldo a favor (anticipos)
   source      String?   // CRM: cómo nos conoció (Instagram, Recomendación, etc.)
   sellerId    String?   // vendedor asignado (cartera de clientes) — módulo Ventas
+  company     Company?  @relation(fields: [companyId], references: [id])
+  companyId   String?   // empresa a la que pertenece el cliente (CRM B2B)
   createdAt   DateTime  @default(now())
 
   record      ClinicalRecord?
@@ -111,17 +113,34 @@ model Client {
   deals       Deal[]
   quotes      Quote[]
   @@index([sellerId])
+  @@index([companyId])
+}
+
+// Empresas cliente (CRM B2B): una empresa agrupa varios clientes/contactos
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  rfc       String?              // RFC / identificación fiscal
+  phone     String?
+  email     String?
+  address   String?
+  notes     String?
+  createdAt DateTime @default(now())
+  clients   Client[]
+  @@index([name])
 }
 
 // Etapas del pipeline de tratos (configurables por el admin)
 model DealStage {
   id        String   @id @default(cuid())
   name      String                       // Prospecto, Contactado, Propuesta...
+  pipeline  String   @default("b2c")      // embudo al que pertenece: b2c | b2b
   order     Int      @default(0)          // posición de la columna (izq→der)
   isWon     Boolean  @default(false)      // etapa de cierre ganado
   isLost    Boolean  @default(false)      // etapa de cierre perdido
   createdAt DateTime @default(now())
   deals     Deal[]
+  @@index([pipeline])
 }
 
 // Trato / oportunidad de venta (para el pipeline B2B arrastrable)
@@ -468,7 +487,8 @@ model Sale {
   creditUsed  Float         @default(0)
   pointsRedeemed Int        @default(0)  // puntos canjeados en esta venta
   pointsDiscount Float      @default(0)  // descuento en $ por canje de puntos
-  total       Float
+  total       Float                        // total cobrado (incluye propina si hubo)
+  tip         Float         @default(0)    // propina (no cuenta como ingreso del negocio)
   paymentMethod PaymentMethod @default(efectivo)
   points      Int           @default(0) // puntos netos al saldo (ganados − canjeados)
   voided      Boolean       @default(false) // ticket cancelado / devuelto
@@ -493,6 +513,10 @@ model SaleItem {
   price       Float
   specialistId String?
   fromPackage Boolean @default(false)
+  // Detalle para REVERTIR con exactitud al cancelar la venta:
+  variantId   String? // si se vendió una variante concreta
+  warehouseId String? // almacén del que se descontó (multi-almacén)
+  meta        Json?   // { bundle:[{componentId,qty}], recipe:[{supplyId,qty}], packageId, createdPackageId }
   @@index([saleId])        // cargar los renglones de una venta
   @@index([specialistId])  // comisiones por especialista
 }
@@ -617,4 +641,89 @@ model PriceListItem {
   price       Float                           // precio especial en esta lista
   @@unique([listId, productId])
   @@index([listId])
+}
+
+// ---------- MÓDULO PROYECTOS (CRM): Proyecto → Hitos → Listas de tareas → Tareas → Subtareas ----------
+model Project {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  status      String    @default("por_iniciar")  // por_iniciar | en_progreso | en_pausa | completado
+  clientId    String?                              // ligado opcional a un cliente
+  companyId   String?                              // o a una empresa
+  dealId      String?                              // o nacido de una oportunidad
+  ownerId     String?                              // responsable principal (Staff)
+  dueDate     DateTime?                            // fecha límite del proyecto
+  value       Float?                               // presupuesto/valor opcional
+  order       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  members     ProjectMember[]
+  milestones  Milestone[]
+  @@index([status])
+  @@index([ownerId])
+  @@index([clientId])
+}
+
+// Empleados asignados a un proyecto (para "mis proyectos")
+model ProjectMember {
+  id        String  @id @default(cuid())
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  staffId   String
+  @@unique([projectId, staffId])
+  @@index([staffId])
+}
+
+// Hito: punto clave en la línea de tiempo del proyecto, con fecha meta
+model Milestone {
+  id          String    @id @default(cuid())
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  name        String
+  description String?
+  targetDate  DateTime?                            // meta para alcanzar el hito
+  completed   Boolean   @default(false)
+  order       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  taskLists   TaskList[]
+  @@index([projectId])
+}
+
+// Lista de tareas priorizada dentro de un hito
+model TaskList {
+  id          String    @id @default(cuid())
+  milestone   Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  milestoneId String
+  name        String
+  order       Int       @default(0)
+  tasks       Task[]
+  @@index([milestoneId])
+}
+
+// Tarea: unidad de trabajo asignada a un empleado
+model Task {
+  id         String    @id @default(cuid())
+  taskList   TaskList  @relation(fields: [taskListId], references: [id], onDelete: Cascade)
+  taskListId String
+  title      String
+  done       Boolean   @default(false)
+  priority   String    @default("media")           // alta | media | baja
+  assigneeId String?                                // Staff asignado
+  dueDate    DateTime?
+  order      Int       @default(0)
+  createdAt  DateTime  @default(now())
+  subtasks   Subtask[]
+  @@index([taskListId])
+  @@index([assigneeId])
+}
+
+// Subtarea: paso pequeño dentro de una tarea
+model Subtask {
+  id      String  @id @default(cuid())
+  task    Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId  String
+  title   String
+  done    Boolean @default(false)
+  order   Int     @default(0)
+  @@index([taskId])
 }
